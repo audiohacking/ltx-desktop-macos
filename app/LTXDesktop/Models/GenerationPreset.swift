@@ -25,7 +25,6 @@ struct PresetParams: Codable {
     let guidanceScale: Double?
     let negativePrompt: String?
     let generateAudio: Bool?
-    let ffmpegUpscale: Bool?
 
     enum CodingKeys: String, CodingKey {
         case width, height, steps, seed, fps
@@ -33,7 +32,6 @@ struct PresetParams: Codable {
         case guidanceScale = "guidance_scale"
         case negativePrompt = "negative_prompt"
         case generateAudio = "generate_audio"
-        case ffmpegUpscale = "ffmpeg_upscale"
     }
 }
 

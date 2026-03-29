@@ -115,7 +115,6 @@ class I2VRequest(BaseModel):
     guidance_scale: float = Field(default=1.0, ge=0.0, le=20.0)
     fps: int = Field(default=24, ge=1, le=60)
     image_strength: float = Field(default=1.0, ge=0.0, le=1.0)
-    upscale: bool = Field(default=False, description="2x spatial upscale via latent upsampler")
     lora_ids: list[str] = Field(default=[], description="LoRA IDs to apply (empty = use active LoRAs)")
 
 

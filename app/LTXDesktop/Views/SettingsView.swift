@@ -28,7 +28,7 @@ struct SettingsView: View {
 
                         Toggle(isOn: $enhanceEnabled) {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("Enable prompt enhancement (Qwen3.5-2B)")
+                                Text("Enable prompt enhancement (Gemma 3 12B)")
                                     .font(.body)
                                 Text("Automatically expands short prompts into detailed LTX-2.3 optimized descriptions. Requires ~1.2GB RAM and temporarily unloads the video model.")
                                     .font(.caption)

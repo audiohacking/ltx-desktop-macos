@@ -5,7 +5,6 @@ Runs 10 consecutive text-to-video generations and validates:
 2. Memory after gen 10 is within 20% of memory after gen 1
 3. No generation takes >2x longer than gen 1
 4. All 10 output files are valid MP4s
-5. TeaCache is active and providing speedup (Sprint 2)
 
 Config: 256x256, 9 frames, 2 steps (stub mode).
 """
@@ -95,13 +94,12 @@ def _verify_mp4(path: str) -> bool:
 
 @pytest.mark.timeout(3600)
 def test_marathon_10_generations(backend_process):
-    """Run 10 consecutive generations and validate stability + TeaCache."""
+    """Run 10 consecutive generations and validate stability."""
     client = httpx.Client(base_url=backend_process, timeout=600)
     results = []
 
     print("\n" + "=" * 60)
     print("MARATHON GENERATION TEST — 10 consecutive generations")
-    print("TeaCache enabled")
     print("=" * 60)
 
     for i in range(1, 11):
@@ -109,13 +107,9 @@ def test_marathon_10_generations(backend_process):
         result = _generate_and_wait(client, i)
         results.append(result)
 
-        teacache_hit = result["stages"].get("teacache_hit_rate", 0)
-        teacache_speedup = result["stages"].get("teacache_speedup", 1.0)
         print(f"  Time: {result['elapsed']:.2f}s")
         print(f"  Active memory: {result['active_memory_gb']:.3f} GB")
         print(f"  Cache memory: {result['cache_memory_gb']:.3f} GB")
-        print(f"  TeaCache hit rate: {teacache_hit:.1%}")
-        print(f"  TeaCache speedup: {teacache_speedup:.2f}x")
         print(f"  Output: {result['output_path']}")
 
     print("\n" + "=" * 60)
@@ -157,19 +151,6 @@ def test_marathon_10_generations(backend_process):
             f"FAIL: Invalid MP4 at {r['output_path']}"
         )
     print("PASS: All 10 output files are valid MP4s")
-
-    # Criterion 5: TeaCache is active (Sprint 2)
-    # Check that at least some generations show TeaCache stats
-    teacache_active = any(
-        r["stages"].get("teacache_hit_rate", 0) > 0
-        for r in results
-    )
-    if teacache_active:
-        avg_hit = sum(r["stages"].get("teacache_hit_rate", 0) for r in results) / len(results)
-        avg_speedup = sum(r["stages"].get("teacache_speedup", 1.0) for r in results) / len(results)
-        print(f"PASS: TeaCache active — avg hit rate={avg_hit:.1%}, avg speedup={avg_speedup:.2f}x")
-    else:
-        print("INFO: TeaCache stats not available (stub mode — blocks not real)")
 
     print("\n" + "=" * 60)
     print("MARATHON TEST PASSED")

@@ -1,7 +1,7 @@
 """Image-to-Video (I2V) generation pipeline.
 
 Takes a reference image that conditions the first frame of the generated video.
-Uses MLX inference via mlx-video-with-audio subprocess.
+Uses ltx-pipelines-mlx for video generation.
 """
 
 from __future__ import annotations

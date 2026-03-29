@@ -37,7 +37,6 @@ BUILTIN_PRESETS: list[dict[str, Any]] = [
             "guidance_scale": 1.0,
             "negative_prompt": "",
             "generate_audio": False,
-            "ffmpeg_upscale": False,
         },
     },
     {
@@ -55,7 +54,6 @@ BUILTIN_PRESETS: list[dict[str, Any]] = [
             "guidance_scale": 1.0,
             "negative_prompt": "",
             "generate_audio": False,
-            "ffmpeg_upscale": False,
         },
     },
     {
@@ -73,7 +71,6 @@ BUILTIN_PRESETS: list[dict[str, Any]] = [
             "guidance_scale": 1.0,
             "negative_prompt": "",
             "generate_audio": False,
-            "ffmpeg_upscale": False,
         },
     },
 ]

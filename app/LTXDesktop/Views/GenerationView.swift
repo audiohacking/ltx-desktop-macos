@@ -228,35 +228,9 @@ struct GenerationView: View {
                     }
                 }
 
-                // Neural Upscale toggle
-                VStack(alignment: .leading, spacing: 4) {
-                    Toggle(isOn: $vm.upscale) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Neural Upscale 2\u{00D7}")
-                                .font(.subheadline)
-                            Text("Generates at half resolution then upscales with neural network. Better quality at high resolutions.")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-
-                    // Warning: high resolution without upscale
-                    if !vm.upscale && vm.selectedResolution.needsUpscaleWarning {
-                        HStack(spacing: 4) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.orange)
-                                .font(.caption)
-                            Text("High resolution without upscale may be slow")
-                                .font(.caption2)
-                                .foregroundStyle(.orange)
-                        }
-                    }
-
-                    // Warning: Full HD on insufficient RAM (only show if hardware limits confirm it)
-                    if vm.selectedResolution.isFullHD,
-                       let limits = vm.hardwareLimits,
-                       limits.totalRamGb < 64 {
+                // Full HD RAM warning
+                if vm.selectedResolution.isFullHD {
+                    if let limits = vm.hardwareLimits, limits.totalRamGb < 64 {
                         HStack(spacing: 4) {
                             Image(systemName: "memorychip")
                                 .foregroundStyle(.red)
@@ -265,8 +239,7 @@ struct GenerationView: View {
                                 .font(.caption2)
                                 .foregroundStyle(.red)
                         }
-                    } else if vm.selectedResolution.isFullHD, vm.hardwareLimits == nil {
-                        // Fallback when limits not yet loaded
+                    } else if vm.hardwareLimits == nil {
                         HStack(spacing: 4) {
                             Image(systemName: "memorychip")
                                 .foregroundStyle(.red)

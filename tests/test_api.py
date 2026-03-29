@@ -62,10 +62,6 @@ def test_generate_t2v(client: httpx.Client):
     assert status["status"] == "completed", f"Job failed: {status.get('error')}"
     assert status["result"]["output_path"].endswith(".mp4")
 
-    # Sprint 2: Verify TeaCache stats are present
-    stages = status["result"].get("stages", {})
-    assert "teacache_hit_rate" in stages, "TeaCache stats missing from result"
-
 
 def test_generate_preview(client: httpx.Client):
     """POST /generate/preview produces a fast low-res video."""

@@ -33,11 +33,10 @@ struct I2VRequest: Codable {
     var guidanceScale: Double = 1.0
     var fps: Int = 24
     var imageStrength: Double = 1.0
-    var upscale: Bool = false
     var loraIds: [String] = []
 
     enum CodingKeys: String, CodingKey {
-        case prompt, width, height, steps, seed, fps, upscale
+        case prompt, width, height, steps, seed, fps
         case sourceImagePath = "source_image_path"
         case numFrames = "num_frames"
         case guidanceScale = "guidance_scale"

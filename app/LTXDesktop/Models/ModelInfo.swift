@@ -15,7 +15,6 @@ struct ModelInfo: Identifiable, Codable {
         switch modelType {
         case "video_generator": return "Video Generator"
         case "text_encoder": return "Text Encoder"
-        case "prompt_enhancer": return "Prompt Enhancer"
         case "upscaler": return "Upscaler"
         default: return modelType
         }

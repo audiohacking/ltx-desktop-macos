@@ -1,6 +1,6 @@
 """Text-to-Video generation pipeline.
 
-Uses MLX inference via mlx-video-with-audio subprocess for real video generation.
+Uses ltx-pipelines-mlx for video generation.
 """
 
 from __future__ import annotations

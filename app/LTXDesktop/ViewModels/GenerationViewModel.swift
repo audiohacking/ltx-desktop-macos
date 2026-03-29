@@ -31,7 +31,6 @@ class GenerationViewModel: ObservableObject {
     @Published var sourceImageData: Data?
     @Published var isEnhancing: Bool = false
     @Published var imageStrength: Double = 1.0
-    @Published var upscale: Bool = false
     @Published var statusMessage: String?
 
     // Queue state
@@ -156,7 +155,6 @@ class GenerationViewModel: ObservableObject {
                     seed: seed,
                     fps: fps,
                     imageStrength: imageStrength,
-                    upscale: upscale,
                     loraIds: selectedLoRAIdArray
                 )
                 submitResponse = try await service.generateImageToVideo(request: request, priority: priority)
@@ -416,8 +414,7 @@ class GenerationViewModel: ObservableObject {
             fps: fps,
             guidanceScale: 1.0,
             negativePrompt: "",
-            generateAudio: false,
-            ffmpegUpscale: upscale
+            generateAudio: false
         )
         do {
             let preset = try await service.createPreset(name: name, params: params)
@@ -438,7 +435,6 @@ class GenerationViewModel: ObservableObject {
         steps = p.steps
         seed = p.seed
         fps = p.fps
-        upscale = p.ffmpegUpscale ?? false
         selectedPresetId = preset.id
     }
 
