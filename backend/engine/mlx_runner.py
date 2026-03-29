@@ -1,259 +1,121 @@
-"""Async subprocess wrapper for LTX-2.3 MLX video generation.
+"""Async subprocess orchestrator for MLX generation.
 
-Runs LTX-2.3 inference via ``python -m engine.generate_v23`` in a
-subprocess, parsing stderr progress lines in real time and forwarding
-them to an optional async callback.
+Launches ``python -m engine.generate_v23`` as a subprocess and parses its
+stderr output for real-time progress reporting back to the FastAPI server.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import os
 import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
-from engine.memory_manager import aggressive_cleanup
+from huggingface_hub import try_to_load_from_cache
 
 log = logging.getLogger(__name__)
 
-# Default model repo on HuggingFace (int8 quantized, MLX split format)
-DEFAULT_MODEL_REPO = "dgrauet/ltx-2.3-mlx-distilled-q8"
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 
-# HuggingFace cache root
+DEFAULT_MODEL_REPO = "dgrauet/ltx-2.3-mlx-q8"
+
 _HF_CACHE = Path.home() / ".cache" / "huggingface" / "hub"
 
-
-# Regex patterns for stderr progress lines
+# Stderr line patterns (must match generate_v23.py output)
 _STAGE_RE = re.compile(r"^STAGE:(\d+):STEP:(\d+):(\d+)")
 _STATUS_RE = re.compile(r"^STATUS:(.+)")
 _MEMORY_RE = re.compile(r"^MEMORY:(\w+):active=([\d.]+):cache=([\d.]+):peak=([\d.]+)")
 _PREVIEW_RE = re.compile(r"^PREVIEW:(.+)")
 
-# Progress mapping — maps (stage, step/total) to overall 0.0-1.0 range
-# When two-stage is active, Stage 1 gets 0.05-0.55, Stage 2 gets 0.65-0.80
-# When single-stage, Stage 1 gets 0.05-0.85 (same as before)
-_STAGE_RANGES: dict[int, tuple[float, float]] = {
-    1: (0.05, 0.55),  # Stage 1 denoising (half res)
-    2: (0.65, 0.80),  # Stage 2 refinement (target res)
+# Progress ranges for mapping STAGE lines to 0.0-1.0
+_STAGE_RANGES = {1: (0.05, 0.55), 2: (0.65, 0.80)}
+_SINGLE_STAGE_RANGES = {1: (0.05, 0.85)}
+
+# Status string -> approximate progress
+_STATUS_PROGRESS = {
+    "loading": 0.02,
+    "stage 1": 0.06,
+    "generating": 0.10,
+    "upscaling latent": 0.57,
+    "reloading model": 0.60,
+    "stage 2": 0.63,
+    "upscaling": 0.83,
+    "decoding video": 0.88,
+    "decoding audio": 0.93,
+    "retaking": 0.10,
+    "extending": 0.10,
+    "saving": 0.97,
+    "done": 1.0,
 }
 
-# Fallback for single-stage (no stage 2 progress lines emitted)
-_SINGLE_STAGE_RANGES: dict[int, tuple[float, float]] = {
-    1: (0.05, 0.85),
-}
 
-
-def _is_quantized_model(model_path: Path) -> bool:
-    """Check if a model directory contains quantized weights."""
-    qconfig = model_path / "quantize_config.json"
-    return qconfig.exists()
-
+# ---------------------------------------------------------------------------
+# Model resolution
+# ---------------------------------------------------------------------------
 
 def get_model_repo(repo_id: str | None = None) -> tuple[str, bool]:
-    """Return the model path and whether it's quantized.
-
-    Args:
-        repo_id: HuggingFace repo ID to resolve. Uses DEFAULT_MODEL_REPO if None.
+    """Resolve a HuggingFace repo ID to a local cache path.
 
     Returns:
-        Tuple of (model_path, is_quantized).
+        (model_path, is_quantized) -- path is the repo ID if not cached locally.
     """
     target_repo = repo_id or DEFAULT_MODEL_REPO
 
-    # Try HF standard cache first
     model_path = _resolve_hf_model(target_repo)
     if model_path:
         quantized = _is_quantized_model(Path(model_path))
         log.info("Using HF model: %s (%s)", target_repo, model_path)
         return model_path, quantized
 
-    # Last resort: return repo ID (generation will fail if not downloadable)
-    log.warning("Could not resolve model %s — returning repo ID", target_repo)
+    log.warning("Could not resolve model %s -- returning repo ID", target_repo)
     return target_repo, True
 
 
 def _resolve_hf_model(repo_id: str) -> str | None:
-    """Resolve a HuggingFace repo to a local cached path.
-
-    Uses huggingface_hub to check if the model is already cached,
-    without triggering a download. Returns the snapshot path if cached.
-
-    Args:
-        repo_id: HuggingFace repository ID.
-
-    Returns:
-        Local path to the cached model, or None if not cached.
-    """
-    try:
-        from huggingface_hub import try_to_load_from_cache
-
-        # Check that main model weights are cached (implies config is too)
-        weights_cached = try_to_load_from_cache(repo_id, "transformer.safetensors")
-        if weights_cached and isinstance(weights_cached, str):
-            return str(Path(weights_cached).parent)
-    except Exception as e:
-        log.debug("Could not check HF cache for %s: %s", repo_id, e)
+    """Check HF cache for a downloaded model. Returns directory path or None."""
+    for check_file in ("transformer-distilled.safetensors", "transformer-dev.safetensors"):
+        result = try_to_load_from_cache(repo_id, check_file)
+        if result and isinstance(result, str):
+            return str(Path(result).parent)
     return None
 
 
+def _is_quantized_model(model_dir: Path) -> bool:
+    """Check if model has quantization config."""
+    return (model_dir / "quantize_config.json").exists()
+
+
 def get_venv_python() -> str:
-    """Auto-detect the venv Python path relative to this file.
-
-    Walks up from ``engine/mlx_runner.py`` to find ``backend/.venv/bin/python``.
-
-    Returns:
-        Absolute path to the venv Python binary.
-
-    Raises:
-        FileNotFoundError: If the venv Python binary cannot be found.
-    """
-    # __file__ is backend/engine/mlx_runner.py → parent.parent = backend/
+    """Auto-detect the venv Python binary."""
     backend_dir = Path(__file__).resolve().parent.parent
     venv_python = backend_dir / ".venv" / "bin" / "python"
     if venv_python.exists():
         return str(venv_python)
-    raise FileNotFoundError(
-        f"Venv Python not found at {venv_python}. "
-        f"Run 'uv sync' in {backend_dir} to create the virtual environment."
-    )
+    raise FileNotFoundError(f"No venv Python at {venv_python}")
 
 
-def _get_text_encoder_4bit() -> str | None:
-    """Return the path to a 4-bit text encoder if available.
+# ---------------------------------------------------------------------------
+# Progress helpers
+# ---------------------------------------------------------------------------
 
-    On 32GB machines, the bf16 Gemma 3 12B (~24GB) is too large.
-    Uses the 4-bit version (~6GB) instead.
-    """
-    # Check for locally cached 4-bit text encoder
-    model_dir = _HF_CACHE / "models--mlx-community--gemma-3-12b-it-4bit"
-    if model_dir.exists():
-        snapshots = model_dir / "snapshots"
-        if snapshots.exists():
-            for d in sorted(snapshots.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
-                if (d / "config.json").exists():
-                    log.info("Using 4-bit text encoder: %s", d)
-                    return str(d)
-    # Fallback: use the HF repo ID (will download on first use)
-    return "mlx-community/gemma-3-12b-it-4bit"
+def _compute_progress(stage: int, step: int, total: int, *, two_stage: bool = False) -> float:
+    """Map (stage, step, total) to a 0.0-1.0 progress value."""
+    ranges = _STAGE_RANGES if two_stage else _SINGLE_STAGE_RANGES
+    lo, hi = ranges.get(stage, (0.0, 1.0))
+    if total <= 0:
+        return lo
+    frac = step / total
+    return lo + frac * (hi - lo)
 
 
-
-def _get_upscaler_weights() -> str | None:
-    """Find or download the LTX-2.3 spatial upscaler weights.
-
-    Searches local HuggingFace cache for the upscaler safetensors file.
-    Falls back to downloading from HuggingFace if not found locally.
-
-    Returns:
-        Path to the upscaler weights file, or None if unavailable.
-    """
-    _UPSCALER_REPO = "Lightricks/LTX-2.3"
-    _UPSCALER_FILE = "ltx-2.3-spatial-upscaler-x2-1.0.safetensors"
-
-    # Check HF cache for upscaler weights inside main LTX-2.3 repo
-    repo_dir = _HF_CACHE / "models--Lightricks--LTX-2.3" / "snapshots"
-    if repo_dir.exists():
-        for snapshot in sorted(repo_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
-            candidate = snapshot / _UPSCALER_FILE
-            if candidate.exists():
-                log.info("Found upscaler weights: %s", candidate)
-                return str(candidate)
-
-    # Not cached locally — download just the upscaler file from the main repo
-    try:
-        from huggingface_hub import hf_hub_download
-
-        log.info("Downloading upscaler weights from %s...", _UPSCALER_REPO)
-        path = hf_hub_download(
-            repo_id=_UPSCALER_REPO,
-            filename=_UPSCALER_FILE,
-        )
-        log.info("Downloaded upscaler weights: %s", path)
-        return path
-    except Exception as e:
-        log.warning("Could not find or download upscaler weights: %s", e)
-        return None
-
-
-def _compute_progress(stage: int, step: int, total: int, is_two_stage: bool = False) -> float:
-    """Compute overall progress percentage from stage/step info.
-
-    Args:
-        stage: Current stage number (1 or 2).
-        step: Current step within the stage.
-        total: Total steps in the stage.
-        is_two_stage: If True, use two-stage progress ranges.
-
-    Returns:
-        Overall progress as a float between 0.0 and 1.0.
-    """
-    ranges = _STAGE_RANGES if is_two_stage else _SINGLE_STAGE_RANGES
-    if stage in ranges:
-        lo, hi = ranges[stage]
-        frac = step / max(total, 1)
-        return lo + frac * (hi - lo)
-    # Unknown stage — return rough estimate
-    return 0.85
-
-
-async def _run_text_encoding_subprocess(
-    python_bin: str,
-    model_repo: str,
-    prompt: str,
-    embeddings_path: str,
-    backend_dir: str,
-    text_encoder_repo: str | None = None,
-) -> None:
-    """Run text encoding in an isolated subprocess.
-
-    On 32GB machines, the text encoder (4-bit Gemma 3 12B ~7.5GB + connectors
-    ~2.7GB) and the video transformer (~10GB) cannot coexist. By encoding in a
-    separate subprocess that exits before generation starts, we guarantee the
-    text encoder memory is fully freed.
-    """
-    cmd = [
-        python_bin,
-        "-m", "engine.encode_text_subprocess",
-        "--prompt", prompt,
-        "--model-repo", model_repo,
-        "--output", embeddings_path,
-    ]
-    if text_encoder_repo:
-        cmd.extend(["--text-encoder-repo", text_encoder_repo])
-
-    log.info("Running text encoding subprocess...")
-    te_env = os.environ.copy()
-    te_env["PYTHONDONTWRITEBYTECODE"] = "1"
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        cwd=backend_dir,
-        env=te_env,
-    )
-
-    _, stderr_data = await proc.communicate()
-    stderr_text = stderr_data.decode("utf-8", errors="replace")
-
-    if proc.returncode != 0:
-        log.error("Text encoding failed (exit code %d): %s", proc.returncode, stderr_text)
-        if proc.returncode == -6:
-            raise RuntimeError(
-                "Not enough GPU memory for text encoding. "
-                "Close other apps and try again."
-            )
-        raise RuntimeError(
-            f"Text encoding failed with exit code {proc.returncode}:\n{stderr_text}"
-        )
-
-    for line in stderr_text.strip().split("\n"):
-        if line.strip():
-            log.debug("encode_text: %s", line)
-
-    log.info("Text encoding complete, embeddings saved to %s", embeddings_path)
-
+# ---------------------------------------------------------------------------
+# Main generation function
+# ---------------------------------------------------------------------------
 
 async def run_mlx_generation(
     prompt: str,
@@ -263,162 +125,79 @@ async def run_mlx_generation(
     seed: int,
     fps: int,
     output_path: str,
+    mode: str = "t2v",
     image: str | None = None,
     image_strength: float = 1.0,
-    image_frame_idx: int = 0,
     num_steps: int = 8,
-    upscale: bool = False,
-    ffmpeg_upscale: bool = False,
-    preview_interval: int = 0,
-    skip_bwe: bool = True,
+    enhance_prompt: bool = False,
     lora_args: list[str] | None = None,
     retake_source: str | None = None,
     retake_start_frame: int = 0,
     retake_end_frame: int = -1,
+    extend_source: str | None = None,
+    extend_frames: int = 49,
+    extend_direction: str = "after",
     progress_callback: Callable[..., Awaitable[None]] | None = None,
     venv_python: str | None = None,
     model_repo_id: str | None = None,
 ) -> dict:
-    """Run LTX-2.3 video generation as an async subprocess.
-
-    Text encoding runs in a separate subprocess first (for 32GB memory
-    management). Embeddings are passed via LTX_PRECOMPUTED_EMBEDDINGS env var.
-
-    Args:
-        prompt: Text prompt describing the video to generate.
-        height: Output video height in pixels.
-        width: Output video width in pixels.
-        num_frames: Number of frames to generate.
-        seed: Random seed for reproducibility.
-        fps: Output frames per second.
-        output_path: Path where the output MP4 will be written.
-        image: Optional path to a reference image for I2V generation.
-        image_strength: Strength of image conditioning (0.0-1.0).
-        num_steps: Number of denoising steps (default 8 for distilled model).
-        upscale: If True, use two-stage neural upscale pipeline.
-        ffmpeg_upscale: If True, apply ffmpeg lanczos 2x post-processing.
-        preview_interval: Emit preview frames every N diffusion steps (0=off).
-        skip_bwe: If True, disable bandwidth extension (16kHz audio).
-        lora_args: Optional LoRA arguments (--lora path:strength).
-        retake_source: Path to source video for retake (segment regeneration).
-        retake_start_frame: First latent frame index of retake region (inclusive).
-        retake_end_frame: Last latent frame index of retake region (exclusive, -1=last).
-        progress_callback: Optional async callback invoked with
-            ``(step, total_steps, stage, pct, status=None)`` where ``pct``
-            is 0.0-1.0 and ``status`` is an optional human-readable stage label.
-        venv_python: Path to venv Python binary. Auto-detected if None.
+    """Launch a generation subprocess and stream progress back.
 
     Returns:
-        Dictionary with ``output_path`` and ``subprocess_memory``.
-
-    Raises:
-        RuntimeError: If the subprocess exits with a non-zero code.
-        FileNotFoundError: If the venv Python binary cannot be found.
+        Dict with ``output_path`` and ``subprocess_memory`` snapshots.
     """
     python_bin = venv_python or get_venv_python()
-    model_repo, is_quantized = get_model_repo(model_repo_id)
-    module = "engine.generate_v23"
-    log.info("Using LTX-2.3 vendored pipeline (%s)", model_repo_id or "default")
-
-    # Ensure output directory exists
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-
-    # Run from backend/ directory so engine.* imports work for quantized wrapper
+    model_repo, _ = get_model_repo(model_repo_id)
     backend_dir = str(Path(__file__).resolve().parent.parent)
 
-    # Get 4-bit text encoder path
-    text_encoder_4bit = _get_text_encoder_4bit()
-
-    # For quantized models, run text encoding in a separate subprocess
-    # to avoid OOM when both text encoder and transformer compete for GPU memory
-    embeddings_path: str | None = None
-    if is_quantized:
-        import tempfile
-        embeddings_dir = Path(output_path).parent
-        embeddings_path = str(embeddings_dir / f"_embeddings_{Path(output_path).stem}.npz")
-
-        if progress_callback is not None:
-            await progress_callback(0, 0, 0, 0.01, status="Encoding text")
-
-        await _run_text_encoding_subprocess(
-            python_bin=python_bin,
-            model_repo=model_repo,
-            prompt=prompt,
-            embeddings_path=embeddings_path,
-            backend_dir=backend_dir,
-            text_encoder_repo=text_encoder_4bit,
-        )
-
-        if progress_callback is not None:
-            await progress_callback(0, 0, 0, 0.05, status="Text encoding complete")
-
+    # Build command
     cmd = [
-        python_bin,
-        "-m", module,
+        python_bin, "-m", "engine.generate_v23",
+        "--mode", mode,
         "--prompt", prompt,
+        "--model-dir", model_repo,
         "--height", str(height),
         "--width", str(width),
         "--num-frames", str(num_frames),
         "--seed", str(seed),
         "--fps", str(fps),
         "--output-path", output_path,
-        "--model-dir", model_repo,
         "--num-steps", str(num_steps),
-        "--generate-audio",
     ]
 
-    if image is not None:
+    # I2V args
+    if image:
         cmd.extend(["--image", image, "--image-strength", str(image_strength)])
-        if image_frame_idx != 0:
-            cmd.extend(["--image-frame-idx", str(image_frame_idx)])
 
-    # Retake arguments (source video + temporal mask bounds in latent space)
-    if retake_source is not None:
+    # Retake args
+    if retake_source:
         cmd.extend([
             "--retake-source", retake_source,
             "--retake-start-frame", str(retake_start_frame),
             "--retake-end-frame", str(retake_end_frame),
         ])
-        log.info(
-            "Retake enabled: source=%s, latent frames [%d, %d)",
-            retake_source, retake_start_frame, retake_end_frame,
-        )
 
-    # Append LoRA arguments (--lora path:strength, can be repeated)
+    # Extend args
+    if extend_source:
+        cmd.extend([
+            "--extend-source", extend_source,
+            "--extend-frames", str(extend_frames),
+            "--extend-direction", extend_direction,
+        ])
+
+    # LoRA args
     if lora_args:
-        cmd.extend(lora_args)
+        for la in lora_args:
+            cmd.extend(["--lora", la])
 
-    is_two_stage = False
-    if upscale:
-        upscaler_path = _get_upscaler_weights()
-        if upscaler_path:
-            cmd.extend(["--upscale", upscaler_path])
-            is_two_stage = True
-            log.info("Two-stage upscale enabled: %s", upscaler_path)
-        else:
-            cmd.append("--ffmpeg-upscale")
-            log.info("Neural upscaler weights not found, falling back to ffmpeg lanczos 2x")
+    # Prompt enhancement
+    if enhance_prompt:
+        cmd.append("--enhance-prompt")
+        if mode == "i2v":
+            cmd.extend(["--enhance-mode", "i2v"])
 
-    if ffmpeg_upscale:
-        cmd.append("--ffmpeg-upscale")
-        log.info("ffmpeg lanczos 2x post-processing enabled")
-
-    if preview_interval > 0:
-        cmd.extend(["--preview-interval", str(preview_interval)])
-        log.info("Preview frames enabled every %d steps", preview_interval)
-
-    if skip_bwe:
-        cmd.append("--no-bwe")
-        log.info("BWE disabled — audio output at 16kHz (less metallic)")
-
-    log.info("Starting MLX generation: %s", " ".join(cmd[:6]) + " ...")
-    log.debug("Full command: %s", cmd)
-
-    # Set up environment — disable bytecode cache to avoid stale .pyc issues
-    env = os.environ.copy()
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    if embeddings_path:
-        env["LTX_PRECOMPUTED_EMBEDDINGS"] = embeddings_path
+    # Launch subprocess
+    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
 
     proc = await asyncio.create_subprocess_exec(
         *cmd,
@@ -428,146 +207,138 @@ async def run_mlx_generation(
         env=env,
     )
 
-    stderr_lines: list[str] = []
-    # Track memory stats reported by the subprocess
-    subprocess_memory: dict[str, dict[str, float]] = {}
-    # Track last progress values for PREVIEW lines
-    last_step, last_total, last_stage, last_pct = 0, 0, 0, 0.0
-    last_status: str | None = "Generating video"
+    # Parse stderr for progress
+    subprocess_memory: dict[str, dict] = {}
+    last_pct = 0.0
+    last_step, last_total, last_stage = 0, 0, 1
 
-    # Read stderr line by line for progress parsing
-    assert proc.stderr is not None  # noqa: S101
+    assert proc.stderr is not None
     while True:
-        raw_line = await proc.stderr.readline()
-        if not raw_line:
+        line_bytes = await proc.stderr.readline()
+        if not line_bytes:
             break
-        line = raw_line.decode("utf-8", errors="replace").rstrip()
-        stderr_lines.append(line)
+        line = line_bytes.decode("utf-8", errors="replace").rstrip()
 
-        # Parse PREVIEW lines (file path to JPEG preview frame)
-        preview_match = _PREVIEW_RE.match(line)
-        if preview_match:
-            preview_path = preview_match.group(1).strip()
+        # PREVIEW frame
+        m = _PREVIEW_RE.match(line)
+        if m:
+            fpath = m.group(1).strip()
             try:
-                import base64
-
-                with open(preview_path, "rb") as f:
+                with open(fpath, "rb") as f:
                     b64_frame = base64.b64encode(f.read()).decode("ascii")
-                os.unlink(preview_path)
-                log.debug("Preview frame: %d bytes base64", len(b64_frame))
-                if progress_callback is not None:
-                    await progress_callback(
-                        last_step, last_total, last_stage, last_pct,
-                        status=last_status, preview_frame=b64_frame,
+                os.unlink(fpath)
+                if progress_callback:
+                    r = progress_callback(
+                        last_step, last_total, last_pct, b64_frame, status=None,
                     )
-            except Exception as e:
-                log.warning("Failed to read preview frame %s: %s", preview_path, e)
+                    if asyncio.iscoroutine(r):
+                        await r
+            except Exception:
+                log.debug("Failed to read preview frame: %s", fpath)
             continue
 
-        # Parse STAGE:X:STEP:Y:TOTAL lines
-        stage_match = _STAGE_RE.match(line)
-        if stage_match:
-            stage = int(stage_match.group(1))
-            step = int(stage_match.group(2))
-            total = int(stage_match.group(3))
-            pct = _compute_progress(stage, step, total, is_two_stage=is_two_stage)
-            last_step, last_total, last_stage, last_pct = step, total, stage, pct
-            last_status = "Generating video"
-            log.debug("Progress: stage=%d step=%d/%d pct=%.2f", stage, step, total, pct)
-            if progress_callback is not None:
-                await progress_callback(step, total, stage, pct, status="Generating video")
+        # STAGE/STEP progress
+        m = _STAGE_RE.match(line)
+        if m:
+            stage, step, total = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            pct = _compute_progress(stage, step, total)
+            last_pct, last_step, last_total, last_stage = pct, step, total, stage
+            if progress_callback:
+                r = progress_callback(step, total, pct, None, status="Generating video")
+                if asyncio.iscoroutine(r):
+                    await r
             continue
 
-        # Parse MEMORY lines (e.g. MEMORY:after_model_load:active=12.5:cache=2.1:peak=14.3)
-        memory_match = _MEMORY_RE.match(line)
-        if memory_match:
-            label = memory_match.group(1)
+        # MEMORY snapshot
+        m = _MEMORY_RE.match(line)
+        if m:
+            label = m.group(1)
             subprocess_memory[label] = {
-                "active_memory_gb": float(memory_match.group(2)),
-                "cache_memory_gb": float(memory_match.group(3)),
-                "peak_memory_gb": float(memory_match.group(4)),
+                "active_memory_gb": float(m.group(2)),
+                "cache_memory_gb": float(m.group(3)),
+                "peak_memory_gb": float(m.group(4)),
             }
-            log.info(
-                "Subprocess memory [%s]: active=%.3f GB, cache=%.3f GB, peak=%.3f GB",
-                label,
-                subprocess_memory[label]["active_memory_gb"],
-                subprocess_memory[label]["cache_memory_gb"],
-                subprocess_memory[label]["peak_memory_gb"],
-            )
+            log.info("MEMORY[%s] active=%.1fGB cache=%.1fGB peak=%.1fGB",
+                     label, float(m.group(2)), float(m.group(3)), float(m.group(4)))
             continue
 
-        # Parse STATUS lines
-        status_match = _STATUS_RE.match(line)
-        if status_match:
-            status_msg = status_match.group(1).strip()
-            last_status = status_msg
-            log.info("MLX status: %s", status_msg)
-
-            # Map status messages to progress percentages
-            pct = 0.85
-            if "stage 1" in status_msg.lower():
-                pct = 0.06
-            elif "upscaling latent" in status_msg.lower():
-                pct = 0.57
-            elif "reloading model" in status_msg.lower():
-                pct = 0.60
-            elif "stage 2" in status_msg.lower():
-                pct = 0.63
-            elif "upscaling 2x (ffmpeg)" in status_msg.lower():
-                pct = 0.95
-            elif "upscaling" in status_msg.lower():
-                pct = 0.83
-            elif "decoding video" in status_msg.lower():
-                pct = 0.88
-            elif "decoding audio" in status_msg.lower():
-                pct = 0.93
-            elif "saving" in status_msg.lower():
-                pct = 0.97
-            elif "loading" in status_msg.lower():
-                pct = 0.02
-
-            if progress_callback is not None:
-                await progress_callback(0, 0, 0, pct, status=status_msg)
+        # STATUS message
+        m = _STATUS_RE.match(line)
+        if m:
+            status_msg = m.group(1).strip()
+            status_lower = status_msg.lower()
+            for key, pct_val in _STATUS_PROGRESS.items():
+                if key in status_lower:
+                    last_pct = pct_val
+                    break
+            if progress_callback:
+                r = progress_callback(last_step, last_total, last_pct, None, status=status_msg)
+                if asyncio.iscoroutine(r):
+                    await r
             continue
 
-        # Log other stderr lines at debug level
+        # Other stderr lines -> log
         if line:
-            log.debug("MLX stderr: %s", line)
+            log.debug("subprocess: %s", line[-200:])
 
-    # Wait for process to complete
     await proc.wait()
 
-    # Cleanup temp embeddings file
-    if embeddings_path:
-        try:
-            Path(embeddings_path).unlink(missing_ok=True)
-        except OSError:
-            pass
-
-    # Cleanup Metal memory after generation
-    aggressive_cleanup()
-
     if proc.returncode != 0:
-        stderr_text = "\n".join(stderr_lines[-100:])  # Last 100 lines for context
-        log.error("MLX generation failed (exit code %d): %s", proc.returncode, stderr_text)
-
-        # Detect Metal GPU out-of-memory crash (exit code -6 = SIGABRT from Metal)
-        if proc.returncode == -6 and "Command buffer execution failed" in stderr_text:
-            raise RuntimeError(
-                "Not enough GPU memory. Close other apps (including Xcode) and try again, "
-                "or use a lower resolution / fewer frames."
-            )
-
+        remaining = await proc.stderr.read()
+        error_tail = remaining.decode("utf-8", errors="replace")[-500:] if remaining else ""
+        if proc.returncode == -6:
+            raise RuntimeError(f"GPU out of memory (exit code -6). {error_tail}")
         raise RuntimeError(
-            f"MLX generation failed with exit code {proc.returncode}:\n{stderr_text}"
+            f"Generation subprocess failed (exit {proc.returncode}). {error_tail}"
         )
 
-    # Signal completion
-    if progress_callback is not None:
-        await progress_callback(0, 0, 0, 1.0, status="Complete")
-
-    log.info("MLX generation complete: %s", output_path)
     return {
         "output_path": output_path,
         "subprocess_memory": subprocess_memory,
     }
+
+
+# ---------------------------------------------------------------------------
+# Prompt enhancement (subprocess)
+# ---------------------------------------------------------------------------
+
+async def run_prompt_enhance(
+    prompt: str,
+    is_i2v: bool = False,
+    model_repo_id: str | None = None,
+    venv_python: str | None = None,
+) -> str:
+    """Run prompt enhancement in a subprocess via Gemma.
+
+    Returns the enhanced prompt string.
+    """
+    python_bin = venv_python or get_venv_python()
+    model_repo, _ = get_model_repo(model_repo_id)
+    backend_dir = str(Path(__file__).resolve().parent.parent)
+
+    cmd = [
+        python_bin, "-m", "engine.generate_v23",
+        "--mode", "enhance",
+        "--prompt", prompt,
+        "--model-dir", model_repo,
+        "--enhance-mode", "i2v" if is_i2v else "t2v",
+        "--seed", "10",
+    ]
+
+    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=backend_dir,
+        env=env,
+    )
+
+    stdout_bytes, stderr_bytes = await proc.communicate()
+
+    if proc.returncode != 0:
+        error = stderr_bytes.decode("utf-8", errors="replace")[-500:]
+        raise RuntimeError(f"Prompt enhancement failed (exit {proc.returncode}). {error}")
+
+    return stdout_bytes.decode("utf-8").strip()
