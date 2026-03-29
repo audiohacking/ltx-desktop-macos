@@ -8,7 +8,15 @@ class GenerationViewModel: ObservableObject {
     @Published var selectedResolution: Resolution = .landscape768
     @Published var numFrames = 97
     @Published var steps = 8
-    @Published var pipelineType = "one-stage"
+    @Published var pipelineType = "one-stage" {
+        didSet {
+            switch pipelineType {
+            case "two-stage": steps = 30
+            case "two-stage-hq": steps = 15
+            default: steps = 8
+            }
+        }
+    }
     @Published var fps = 24
     @Published var seed = -1
     @Published var isGenerating = false
