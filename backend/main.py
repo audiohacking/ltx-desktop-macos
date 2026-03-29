@@ -197,17 +197,14 @@ def _resolve_seed(seed: int) -> int:
 
 
 def _resolve_lora_args(lora_ids: list[str]) -> list[str] | None:
-    """Resolve LoRA IDs from request to CLI args for the generation subprocess.
-
-    If lora_ids is non-empty, look up each ID in the lora_manager and build
-    CLI args from their paths and strengths. If empty, fall back to whatever
-    LoRAs are globally active in the lora_manager.
+    """Resolve LoRA IDs to path:strength strings for the generation subprocess.
 
     Args:
         lora_ids: List of LoRA ID slugs from the generation request.
 
     Returns:
-        CLI args list like ["--lora", "path:strength", ...] or None if no LoRAs.
+        List of "path:strength" strings, or None if no LoRAs.
+        The runner adds --lora flags itself.
     """
     if lora_ids:
         args: list[str] = []
@@ -216,11 +213,17 @@ def _resolve_lora_args(lora_ids: list[str]) -> list[str] | None:
             info = all_loras.get(lid)
             if info and info.compatible and info.path:
                 strength = info.strength if info.loaded else 0.7
-                args.extend(["--lora", f"{info.path}:{strength}"])
+                args.append(f"{info.path}:{strength}")
             else:
                 log.warning("LoRA ID %r not found or incompatible — skipping", lid)
         return args or None
-    return lora_manager.get_active_lora_args() or None
+
+    # Fall back to globally active LoRAs — extract path:strength from CLI args
+    active = lora_manager.get_active_lora_args()
+    if not active:
+        return None
+    # get_active_lora_args returns ["--lora", "path:str", "--lora", ...] — extract values
+    return [active[i] for i in range(1, len(active), 2)] or None
 
 class HealthResponse(BaseModel):
     """Health check response."""
