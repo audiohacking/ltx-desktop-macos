@@ -58,10 +58,7 @@ class RetakePipeline:
         aggressive_cleanup()
         reset_peak_memory()
 
-        info = probe_video_info(source_video_path)
-        width = info.get("width", 768)
-        height = info.get("height", 512)
-        duration = info.get("duration", 4.0)
+        width, height, duration = probe_video_info(source_video_path)
         num_frames = int(duration * fps)
         num_frames = _round_to_vae_compatible(num_frames)
 
