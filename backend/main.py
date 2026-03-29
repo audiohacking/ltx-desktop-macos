@@ -32,8 +32,6 @@ from engine.pipelines.retake import RetakePipeline
 from engine.pipelines.extend import ExtendPipeline
 from engine.mlx_runner import run_prompt_enhance
 from engine.lora_manager import LoRAManager
-from audio.tts_engine import TTSEngine
-from audio.audio_mixer import AudioMixer
 from job_queue import JobQueue, Priority
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -49,9 +47,6 @@ i2v_pipeline = ImageToVideoPipeline(model_manager)
 retake_pipeline = RetakePipeline(model_manager)
 extend_pipeline = ExtendPipeline(model_manager)
 lora_manager = LoRAManager(model_manager)
-tts_engine = TTSEngine()
-audio_mixer = AudioMixer()
-
 # Selected video generation model (HF repo ID, None = default)
 selected_video_model: str | None = None
 
@@ -292,28 +287,6 @@ class ImportLoRARequest(BaseModel):
     """Request to import a LoRA from a file path."""
     source_path: str = Field(..., min_length=1)
 
-
-class TTSRequest(BaseModel):
-    """Text-to-speech synthesis request."""
-    text: str = Field(..., min_length=1, max_length=5000)
-    voice: str = Field(default="default")
-    speed: float = Field(default=1.0, ge=0.5, le=2.0)
-
-
-class MusicRequest(BaseModel):
-    """Background music generation request."""
-    genre: str = Field(default="ambient")
-    duration: float = Field(default=10.0, ge=1.0, le=300.0)
-
-
-class MixRequest(BaseModel):
-    """Audio mix request — combine TTS and/or music into a video."""
-    video_path: str = Field(..., min_length=1)
-    tts_path: str | None = None
-    music_path: str | None = None
-    music_volume: float = Field(default=0.3, ge=0.0, le=1.0)
-    tts_volume: float = Field(default=1.0, ge=0.0, le=1.0)
-    video_audio_volume: float = Field(default=1.0, ge=0.0, le=1.0)
 
 
 class ExportVideoRequest(BaseModel):
@@ -1405,42 +1378,6 @@ async def import_lora(req: ImportLoRARequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-
-# --- Audio endpoints ---
-
-@app.post("/api/v1/audio/tts", response_model=PathResponse)
-async def audio_tts(req: TTSRequest):
-    """Generate TTS audio from text (local, on-device)."""
-    result = await asyncio.get_event_loop().run_in_executor(
-        None, lambda: tts_engine.synthesize(req.text, req.voice, req.speed)
-    )
-    return PathResponse(output_path=result)
-
-
-@app.post("/api/v1/audio/music", response_model=PathResponse)
-async def audio_music(req: MusicRequest):
-    """Generate background music (stub: sine wave placeholder)."""
-    result = await asyncio.get_event_loop().run_in_executor(
-        None, lambda: audio_mixer.generate_music_stub(req.genre, req.duration)
-    )
-    return PathResponse(output_path=result)
-
-
-@app.post("/api/v1/audio/mix", response_model=PathResponse)
-async def audio_mix(req: MixRequest):
-    """Mix TTS and/or music into a video."""
-    result = await asyncio.get_event_loop().run_in_executor(
-        None,
-        lambda: audio_mixer.mix(
-            video_path=req.video_path,
-            tts_path=req.tts_path,
-            music_path=req.music_path,
-            music_volume=req.music_volume,
-            tts_volume=req.tts_volume,
-            video_audio_volume=req.video_audio_volume,
-        ),
-    )
-    return PathResponse(output_path=result)
 
 
 # --- Export endpoints ---

@@ -10,7 +10,6 @@ struct GenerationView: View {
     @State private var showQueuePopover = false
     @State private var showRetakeSheet = false
     @State private var showExtendSheet = false
-    @StateObject private var audioVM = AudioViewModel()
     @State private var showSavePresetAlert = false
     @State private var newPresetName = ""
 
@@ -374,11 +373,6 @@ struct GenerationView: View {
                         .font(.caption)
                 }
 
-                // Audio panel (shown after video generation completes)
-                if let url = vm.outputVideoURL {
-                    Divider()
-                    AudioPanelView(vm: audioVM, videoPath: url.path)
-                }
 
                 Spacer()
             }

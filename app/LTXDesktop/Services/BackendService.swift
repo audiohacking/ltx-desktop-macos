@@ -266,20 +266,6 @@ class BackendService: ObservableObject {
         return try decoder.decode(SuccessResponse.self, from: data)
     }
 
-    // MARK: - Audio (TTS, Music, Mix)
-
-    func generateTTS(request: TTSRequest) async throws -> PathResponse {
-        return try await post("/api/v1/audio/tts", body: request)
-    }
-
-    func generateMusic(request: MusicRequest) async throws -> PathResponse {
-        return try await post("/api/v1/audio/music", body: request)
-    }
-
-    func mixAudio(request: AudioMixRequest) async throws -> PathResponse {
-        return try await post("/api/v1/audio/mix", body: request)
-    }
-
     // MARK: - Export
 
     func exportVideo(request: ExportVideoRequest) async throws -> PathResponse {
