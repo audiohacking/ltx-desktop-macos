@@ -175,15 +175,20 @@ struct GenerationView: View {
                 }
 
                 // Pipeline type
-                HStack {
-                    Text("Pipeline")
-                        .font(.subheadline)
-                    Picker("", selection: $vm.pipelineType) {
-                        Text("One Stage").tag("one-stage")
-                        Text("Two Stage").tag("two-stage")
-                        Text("Two Stage HQ").tag("two-stage-hq")
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text("Pipeline")
+                            .font(.subheadline)
+                        Picker("", selection: $vm.pipelineType) {
+                            Text("One Stage").tag("one-stage")
+                            Text("Two Stage").tag("two-stage")
+                            Text("Two Stage HQ").tag("two-stage-hq")
+                        }
+                        .pickerStyle(.segmented)
                     }
-                    .pickerStyle(.segmented)
+                    Text(pipelineDescription)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
 
                 // Steps + Seed
@@ -775,6 +780,17 @@ struct GenerationView: View {
             DispatchQueue.main.async {
                 vm.handleImageDrop(urls: [url])
             }
+        }
+    }
+
+    private var pipelineDescription: String {
+        switch vm.pipelineType {
+        case "two-stage":
+            return "Dev model (30 steps) + distilled refinement. Better quality, slower."
+        case "two-stage-hq":
+            return "High quality variant (15 steps) + refinement. Best quality, slowest."
+        default:
+            return "Distilled model (8 steps). Fast generation, good quality."
         }
     }
 
