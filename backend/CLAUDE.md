@@ -71,11 +71,10 @@ for i in range(num_frames):
 - Library handles staged loading via `low_memory=True` (Gemma → free → transformer+VAE)
 - Periodic full model reload every 5 generations
 
-### Performance Optimizations (implement from day 1)
+### Performance Notes
 
-1. `mx.compile(model.forward)` after loading
-2. Kernel warm-up pass (9 frames, 1 step, 256×256) after loading
-3. LatentPool pre-allocation for max expected resolution
+- `mx.compile()` and kernel warm-up are not implemented (incompatible with subprocess-per-generation architecture)
+- Library (`ltx-pipelines-mlx`) handles inference optimization internally
 
 ## Starting Point
 
@@ -124,9 +123,7 @@ backend/
 │       ├── preview.py
 │       ├── retake.py
 │       └── extend.py
-├── audio/
-│   ├── tts_engine.py          # Local TTS (MLX-Audio interface)
-│   └── audio_mixer.py         # ffmpeg-based multi-track mixer
+├── audio/                         # Reserved for future TTS/mixing
 ├── export/
 │   ├── video_encoder.py
 │   └── fcpxml_export.py
@@ -142,4 +139,3 @@ See `pyproject.toml`. Key packages:
 - `fastapi>=0.115.0`, `uvicorn>=0.32.0`, `websockets>=13.0`
 - `safetensors>=0.4.0`, `transformers>=4.51.0`, `huggingface-hub>=0.26.0`
 - `soundfile>=0.12.0` (for audio WAV output)
-- `mlx-audio>=0.4.1` (TTS via Kokoro — mlx-lm pin conflict resolved in 0.4.1+)

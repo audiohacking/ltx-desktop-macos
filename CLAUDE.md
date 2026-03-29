@@ -50,7 +50,6 @@ FastAPI in separate process for: crash isolation (OOM kills backend, not UI), GI
 **DONE:**
 - ✅ T2V with configurable resolution/frames/FPS/guidance/seed/negative prompt
 - ✅ Synchronized audio generation in single pass
-- ✅ Rapid Preview (384×256, 4 steps, seconds)
 - ✅ I2V with reference image (drag & drop), image_strength param
 - ✅ Prompt Enhancement (Gemma 3 12B via ltx-core-mlx)
 - ✅ Model management (auto download, variant selection, delete, cache in `~/.cache/huggingface/`)
@@ -69,8 +68,6 @@ FastAPI in separate process for: crash isolation (OOM kills backend, not UI), GI
 - Generation performance (~8min for 97f@768×512) — mx.compile disabled (see Performance section)
 - Video retake & extend — real inference available via ltx-pipelines-mlx, endpoints need wiring
 - LoRA support — endpoint infrastructure exists but untested end-to-end with real LoRA weights
-- Local TTS voiceover via MLX-Audio (Kokoro, Dia, CSM) — currently sine-wave stub
-- Background music generation — currently sine-wave stub
 - Batch generation queue — queue logic exists, UI not connected
 - Parameter preset saving/loading
 - Hardware enforcement — limit resolution/frames based on detected RAM (currently all resolutions selectable)
@@ -92,24 +89,21 @@ FastAPI in separate process for: crash isolation (OOM kills backend, not UI), GI
 ### Working (real inference / real logic)
 ```
 POST /api/v1/generate/text-to-video     POST /api/v1/generate/image-to-video
-POST /api/v1/generate/preview            WS   /ws/progress/{job_id}
+WS   /ws/progress/{job_id}
 GET  /api/v1/queue                       GET  /api/v1/queue/{job_id}
 POST /api/v1/queue/{job_id}/cancel       POST /api/v1/queue/{job_id}/priority
 GET  /api/v1/models                      POST /api/v1/models/download
 POST /api/v1/models/select               GET  /api/v1/models/{download_id}/status
 DELETE /api/v1/models/{model_id}         POST /api/v1/prompt/enhance
 POST /api/v1/export/video                POST /api/v1/export/fcpxml
-POST /api/v1/audio/mix                   GET  /api/v1/system/health
-GET  /api/v1/system/memory               GET  /api/v1/history
-DELETE /api/v1/history/{job_id}
+GET  /api/v1/system/health               GET  /api/v1/system/memory
+GET  /api/v1/history                     DELETE /api/v1/history/{job_id}
 ```
 
-### Stubs (API exists, fake inference / placeholder output)
+### Stubs (API exists, real inference support via ltx-pipelines-mlx but endpoints not yet wired)
 ```
 POST /api/v1/generate/retake             POST /api/v1/generate/extend
-POST /api/v1/audio/tts                   POST /api/v1/audio/music
 ```
-Note: retake & extend have real inference support via ltx-pipelines-mlx but endpoints still produce stub output.
 
 ### Untested (code exists, no end-to-end verification with real LoRAs)
 ```
@@ -179,9 +173,6 @@ To enable these: would need persistent model server (keep model loaded across ge
 
 ### Two-Stage Pipeline
 Stage 1: low-res generation (768×512) with distilled model (8 steps) → Stage 2: 2× spatial upscale (4 steps) → VAE decode → audio decode → ffmpeg mux. See `engine/generate_v23.py`.
-
-### Rapid Preview
-384×256, 4 steps, single-stage. Seconds. User validates → launches full render.
 
 ### Progressive Diffusion Display
 Every 2 steps, decode middle temporal frame → JPEG → temp file → base64 → WebSocket. ~800ms total overhead per 8-step gen. Enabled for T2V/I2V, disabled for rapid preview.

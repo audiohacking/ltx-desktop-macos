@@ -48,9 +48,8 @@ bash scripts/download_models.sh
 ```
 
 This downloads:
-- `dgrauet/ltx-2.3-mlx-distilled-q8` (~28 GB) — pre-converted MLX video generation model
-- `mlx-community/gemma-3-12b-it-4bit` (~6 GB) — text encoder
-- `mlx-community/Qwen3.5-2B-4bit` (~1.2 GB) — prompt enhancement
+- `dgrauet/ltx-2.3-mlx-q8` (~28 GB) — pre-converted MLX video generation model
+- `mlx-community/gemma-3-12b-it-4bit` (~6 GB) — text encoder (also used for prompt enhancement)
 
 ### 4. Start the backend
 
@@ -97,8 +96,7 @@ The backend runs as a separate process managed by the SwiftUI app's `ProcessMana
 - **Text-to-Video (T2V)**: prompt → video with synchronized audio
 - **Image-to-Video (I2V)**: drag-and-drop source image conditions the first frame
 - **Synchronized audio**: audio generated in single pass (vocoder output, quality WIP)
-- **Rapid preview**: 384x256, 4 steps — validates prompt direction in seconds
-- **Prompt enhancement**: Qwen3.5-2B rewrites short prompts into detailed descriptions (lazy load/unload)
+- **Prompt enhancement**: Gemma 3 12B rewrites short prompts into detailed descriptions (via ltx-core-mlx)
 - **Progressive preview**: intermediate diffusion frames streamed to UI every 2 steps
 - **Two-stage upscale**: generate at half resolution, neural 2x upscale (single safetensors file from Lightricks/LTX-2.3)
 - **Batch generation queue**: priority-based job queue with cancel support
@@ -111,9 +109,7 @@ The backend runs as a separate process managed by the SwiftUI app's `ProcessMana
 ### Not Yet Working
 
 - **LoRA**: UI exists (scan, toggle, strength slider) but untested with real LTX-2.3 LoRA models
-- **TTS voiceover**: sine-wave placeholder — interface ready for MLX-Audio (Kokoro, Dia, CSM)
-- **Audio mixing**: ffmpeg-based mixer stub
-- **Retake / Extend**: API endpoints exist but pipelines are stubs
+- **Retake / Extend**: real inference via ltx-pipelines-mlx, endpoints need wiring
 - **FCPXML export**: endpoint exists but untested
 
 ---
@@ -122,12 +118,11 @@ The backend runs as a separate process managed by the SwiftUI app's `ProcessMana
 
 | Model | Repo | Role | Size |
 |-------|------|------|------|
-| LTX-2.3 Distilled (int8) | `dgrauet/ltx-2.3-mlx-distilled-q8` | Video generation (transformer + VAE + audio + vocoder) | ~28 GB |
-| Gemma 3 12B IT (4-bit) | `mlx-community/gemma-3-12b-it-4bit` | Text encoder | ~6 GB |
-| Qwen3.5-2B (4-bit) | `mlx-community/Qwen3.5-2B-4bit` | Prompt enhancement | ~1.2 GB |
+| LTX-2.3 (int8) | `dgrauet/ltx-2.3-mlx-q8` | Video generation (transformer + VAE + audio + vocoder) | ~28 GB |
+| Gemma 3 12B IT (4-bit) | `mlx-community/gemma-3-12b-it-4bit` | Text encoder + prompt enhancement | ~6 GB |
 | LTX-2.3 Spatial Upscaler | `Lightricks/LTX-2.3` (single file) | Neural 2x upscale | ~1 GB |
 
-The pipeline uses `mlx-video-with-audio` (Acelogic) as reference implementation for conditioning, denoising loop, and VAE encoding.
+The pipeline uses `ltx-core-mlx` and `ltx-pipelines-mlx` for inference (conditioning, denoising loop, VAE encoding/decoding).
 
 ---
 
@@ -138,7 +133,7 @@ Metal memory fragmentation is the #1 stability risk. The backend implements:
 - **`aggressive_cleanup()`** at every pipeline stage boundary
 - **Streaming VAE decode** to ffmpeg pipe — never all frames in RAM
 - **Periodic model reload** every 5 generations to reclaim fragmented Metal buffers
-- **Prompt enhancer isolation**: loaded, used, and unloaded before the video model (critical on 32 GB)
+- **Prompt enhancement** via Gemma 3 12B (same model as text encoder, handled by library)
 
 ---
 
@@ -177,12 +172,10 @@ Use the Enhance button (Cmd+E) to auto-expand short prompts.
 ## Roadmap
 
 - Audio quality tuning (vocoder output noisy)
-- Real TTS voiceover via MLX-Audio (Kokoro, Dia, CSM)
-- Background music generation
 - LoRA testing with real LTX-2.3 compatible models
-- Video retake (regenerate time segment) and extension (forward/backward)
+- Video retake & extend endpoint wiring (library support ready)
 - FCPXML export for Final Cut Pro / DaVinci Resolve
-- Performance: persistent model server for mx.compile() and TeaCache (currently disabled — incompatible with subprocess-per-gen architecture)
+- Performance: persistent model server for mx.compile() (currently disabled — incompatible with subprocess-per-gen architecture)
 - Simple timeline editor (if demand warrants it)
 - V2V, A2V, keyframe interpolation
 
@@ -190,7 +183,7 @@ Use the Enhance button (Cmd+E) to auto-expand short prompts.
 
 ## Known Limitations
 
-- **~8 min per generation** at 768x512 — TeaCache (0% hit rate with 8-step distilled) and mx.compile() (tracing overhead lost per subprocess) are both disabled
+- **~8 min per generation** at 768x512 — mx.compile() disabled (tracing overhead lost per subprocess)
 - **Audio quality**: vocoder output can sound noisy
 - **32 GB RAM**: text encoder and video model cannot coexist — two-subprocess architecture is mandatory
 - **No 16 GB support**: model weights alone are ~21 GB

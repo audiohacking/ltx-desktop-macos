@@ -43,21 +43,17 @@ Task(agent="backend-engine", prompt="Implement memory_manager.py with aggressive
 ```
 
 Responsibilities:
-- All MLX inference code (T2V, I2V, retake, extend, upscaler, preview)
+- All MLX inference code (T2V, I2V, retake, extend, upscaler) via ltx-pipelines-mlx
 - `memory_manager.py` — aggressive_cleanup(), periodic model reload, streaming VAE decode
 - `model_manager.py` — lazy loading, unloading, HuggingFace download
-- `prompt_enhancer.py` — Qwen3.5-2B via mlx-lm with lazy load/unload
 - `lora_manager.py` — LoRA loading and application
-- `teacache.py` — TeaCache MLX port
-- `mx.compile()` on model forward pass + kernel warm-up pass
-- Latent pool pre-allocation
-- Audio pipelines (TTS via MLX-Audio, mixing)
+- Audio pipelines (vocoder, BWE)
 
 Key constraints:
 - Every pipeline function MUST call `aggressive_cleanup()` between stages
 - Streaming VAE decode to ffmpeg pipe — never all frames in memory
 - Periodic model reload every 5 generations
-- Qwen3.5-2B and LTX-2.3 must NEVER coexist in memory on < 64GB
+- Library handles Gemma/transformer staging via `low_memory=True`
 
 ---
 
@@ -89,7 +85,6 @@ API contract (shared with frontend agent):
 ```
 POST /api/v1/generate/text-to-video    → { job_id }
 POST /api/v1/generate/image-to-video   → { job_id }
-POST /api/v1/generate/preview          → { job_id }
 POST /api/v1/generate/retake           → { job_id }
 POST /api/v1/generate/extend           → { job_id }
 GET  /api/v1/queue                     → [{ job_id, status, progress }]
@@ -99,9 +94,6 @@ GET  /api/v1/models                    → [{ id, name, size, loaded }]
 POST /api/v1/models/download           → { download_id }
 GET  /api/v1/loras                     → [{ id, name, type, compatible }]
 POST /api/v1/loras/load                → { success }
-POST /api/v1/audio/tts                 → { audio_path }
-POST /api/v1/audio/music               → { audio_path }
-POST /api/v1/audio/mix                 → { output_path }
 POST /api/v1/export/video              → { output_path }
 POST /api/v1/export/fcpxml             → { output_path }
 GET  /api/v1/system/info               → { chip, ram_total, ram_available, macos_version }
@@ -165,9 +157,9 @@ Key constraints:
 
 All 5 sprints have been completed. Code is written and app builds/launches. Real MLX inference is working (T2V, I2V, preview, prompt enhancement with quantized int8 model).
 
-LTX-2.3 (22B) migration is complete: vendored model architecture (`engine/ltx23_model/`), conversion script, VAE encoder/decoder, audio VAE decoder, HiFi-GAN vocoder with BWE. End-to-end T2V and I2V verified working.
+LTX-2.3 (22B) migration is complete: inference via `ltx-core-mlx` and `ltx-pipelines-mlx` libraries. End-to-end T2V and I2V verified working. Marathon test passed.
 
-**Remaining**: 97-frame marathon test, progressive diffusion display, history view integration, real TTS via MLX-Audio.
+**Remaining**: retake/extend endpoint wiring, LoRA testing, audio quality improvements.
 
 ---
 
