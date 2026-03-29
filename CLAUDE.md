@@ -14,14 +14,14 @@ Native macOS app replicating **LTX Desktop** (Lightricks) with **100% local infe
 - **Tested resolutions**: up to 1280×704 on 32GB. 1920×1080 selectable in UI but untested on 32GB (likely OOMs)
 - **FPS**: 24 (distilled model)
 - **Audio**: built-in vocoder, synchronized generation (output noisy — quality issue)
-- **Variants**: `ltx-2.3-dev` (full bf16 ~42GB), `ltx-2.3-distilled` (8+4 steps), distilled-fp8. Only distilled supported by mlx-video-with-audio.
-- **Text encoder**: Gemma 3 12B (for video generation, NOT prompt enhancement)
+- **Variants**: `ltx-2.3-dev` (full bf16 ~42GB), `ltx-2.3-distilled` (8+4 steps), distilled-fp8. Only distilled supported by ltx-pipelines-mlx.
+- **Text encoder**: Gemma 3 12B (for video generation AND prompt enhancement via ltx-core-mlx)
 - **VAE**: rebuilt for 2.3, better texture preservation
-- **HuggingFace**: `Lightricks/LTX-2.3`, pre-converted MLX: `dgrauet/ltx-2.3-mlx-distilled-q8`
+- **HuggingFace**: `Lightricks/LTX-2.3`, pre-converted MLX: `dgrauet/ltx-2.3-mlx-q8`
 
 ### MLX on Apple Silicon
 - Unified CPU/GPU memory — no data copying
-- Key packages: `mlx`, `mlx-video-with-audio`, `mlx-lm`, `mlx-audio`
+- Key packages: `mlx`, `ltx-core-mlx`, `ltx-pipelines-mlx`, `mlx-audio`
 - Weight conversion: PyTorch → MLX via [mlx-forge](https://github.com/dgrauet/mlx-forge) (`mlx-forge convert ltx-2.3`)
 - Quantization: int4, int8 support
 
@@ -31,15 +31,15 @@ Native macOS app replicating **LTX Desktop** (Lightricks) with **100% local infe
 
 ```
 SwiftUI → HTTP/WS :8000 → FastAPI → MLX Engine + ffmpeg + MLX-Audio → Apple Silicon Metal
-Two-subprocess: (A) Gemma text encoder → exits → (B) Transformer+VAE generation
+Single subprocess: ltx-pipelines-mlx handles text encoder staging via low_memory=True
 ```
 
 FastAPI in separate process for: crash isolation (OOM kills backend, not UI), GIL avoidance, WebSocket progress streaming, independent restart. See `engine/mlx_runner.py`.
 
-### Prompt Enhancement — Qwen3.5-2B
-- Use `mlx-community/Qwen3.5-2B-4bit` (~1.2GB) via mlx-lm. Apache 2.0 license.
-- **Never coload with video model on <64GB RAM.** Lazy load → enhance → unload → `mx.clear_cache()` → load video model.
-- See `engine/prompt_enhancer.py` for implementation.
+### Prompt Enhancement — Gemma 3 12B
+- Uses `ltx-core-mlx` text encoder's `enhance_t2v()` / `enhance_i2v()` methods
+- Runs in subprocess for memory isolation
+- No separate model needed — reuses the text encoder (Gemma 3 12B)
 
 ---
 
@@ -52,10 +52,10 @@ FastAPI in separate process for: crash isolation (OOM kills backend, not UI), GI
 - ✅ Synchronized audio generation in single pass
 - ✅ Rapid Preview (384×256, 4 steps, seconds)
 - ✅ I2V with reference image (drag & drop), image_strength param
-- ✅ Prompt Enhancement (Qwen3.5-2B, lazy load/unload)
+- ✅ Prompt Enhancement (Gemma 3 12B via ltx-core-mlx)
 - ✅ Model management (auto download, variant selection, delete, cache in `~/.cache/huggingface/`)
 - ✅ Model download UI in Settings (download/delete/progress tracking)
-- ✅ Audio decode pipeline (VAE → vocoder → WAV → mux MP4) — `--generate-audio` for v2.3
+- ✅ Audio decode pipeline (VAE → vocoder → BWE → WAV → mux MP4, 48kHz output) — `--generate-audio` for v2.3
 - ✅ Export MP4 via ffmpeg (H.264/H.265/ProRes, CRF 18)
 - ✅ FCPXML export for Final Cut Pro / DaVinci Resolve
 - ✅ 2× pixel upscale via ffmpeg lanczos
@@ -66,9 +66,8 @@ FastAPI in separate process for: crash isolation (OOM kills backend, not UI), GI
 - ✅ Memory warning thresholds in Settings UI (cache, peak, available)
 
 **REMAINING:**
-- Audio quality — pipeline works but vocoder output noisy; needs investigation
-- Generation performance (~8min for 97f@768×512) — TeaCache/mx.compile both disabled (see Performance section)
-- Video retake & extend — endpoints exist but produce stub output (solid-color clips with sleep), need real inference
+- Generation performance (~8min for 97f@768×512) — mx.compile disabled (see Performance section)
+- Video retake & extend — real inference available via ltx-pipelines-mlx, endpoints need wiring
 - LoRA support — endpoint infrastructure exists but untested end-to-end with real LoRA weights
 - Local TTS voiceover via MLX-Audio (Kokoro, Dia, CSM) — currently sine-wave stub
 - Background music generation — currently sine-wave stub
@@ -110,6 +109,7 @@ DELETE /api/v1/history/{job_id}
 POST /api/v1/generate/retake             POST /api/v1/generate/extend
 POST /api/v1/audio/tts                   POST /api/v1/audio/music
 ```
+Note: retake & extend have real inference support via ltx-pipelines-mlx but endpoints still produce stub output.
 
 ### Untested (code exists, no end-to-end verification with real LoRAs)
 ```
@@ -129,7 +129,7 @@ POST /api/v1/loras/import
 2. **Stream VAE decode** frame-by-frame to ffmpeg pipe — never decode all frames in RAM
 3. **Periodic model reload** every 5 generations (auto-triggered via generation counter in memory_manager.py)
 4. **Monitor** via `/api/v1/system/memory`: active, cache, peak memory + system available
-5. See `engine/memory_manager.py` and `engine/ltx23_model/vae_decoder.py` (streaming decode) for implementation
+5. See `engine/memory_manager.py` for implementation. Streaming VAE decode handled by `ltx-pipelines-mlx`
 
 ### Warning thresholds
 UI indicators in Settings (passive warnings only — no automated actions yet):
@@ -150,7 +150,6 @@ UI indicators in Settings (passive warnings only — no automated actions yet):
 
 ### Current Status — ALL DISABLED
 With the subprocess-per-generation architecture, none of these optimizations are active:
-- **TeaCache** — implemented (`engine/teacache.py`) but 0% cache hit rate with 8-step distilled model. Large sigma jumps between steps cause features to change too much. Designed for 20-50 step models.
 - **mx.compile()** — tracing overhead (~2min) paid every subprocess invocation, compiled kernels lost on exit. Net negative.
 - **Kernel warm-up** — not implemented. Would help first gen but requires persistent model server.
 - **Latent buffer reuse** — not implemented.
@@ -170,7 +169,7 @@ To enable these: would need persistent model server (keep model loaded across ge
 
 - **Minimum**: 32GB RAM. Below that, very limited (low res, few frames)
 - **Model weights**: ~21GB int8 (dominant cost, 85% of memory). Latents only ~300MB.
-- **Budget (32GB)**: OS ~4GB + model ~21GB + buffers ~3GB + Metal cache ~2-4GB + enhancer ~1.2GB (when active)
+- **Budget (32GB)**: OS ~4GB + model ~21GB + buffers ~3GB + Metal cache ~2-4GB
 - Backend detects chip/RAM via `/api/v1/system/info` but **no enforcement** — all resolutions remain selectable regardless of RAM
 - **Not implemented:** RAM < 32GB warning banner, auto-limit resolution/frames based on hardware
 
@@ -187,8 +186,10 @@ Stage 1: low-res generation (768×512) with distilled model (8 steps) → Stage 
 ### Progressive Diffusion Display
 Every 2 steps, decode middle temporal frame → JPEG → temp file → base64 → WebSocket. ~800ms total overhead per 8-step gen. Enabled for T2V/I2V, disabled for rapid preview.
 
-### Two-Subprocess Architecture
-Subprocess A: Gemma 3 12B 4-bit text encoding (~8.7GB peak) → exits, frees GPU. Subprocess B: transformer + VAE generation (~12.6GB peak). Embeddings passed via npz file. See `engine/mlx_runner.py`.
+### Single-Subprocess Architecture
+Single subprocess per generation. The library's `low_memory=True` handles staged loading:
+load Gemma 3 12B → encode text → free Gemma → load transformer + VAE → generate → decode.
+Embeddings no longer passed via npz file. See `engine/mlx_runner.py`.
 
 ---
 
@@ -222,7 +223,7 @@ Example:
 
 - **LTX-2.3**: [Blog](https://ltx.io/model/model-blog/ltx-2-3-release) · [GitHub](https://github.com/Lightricks/LTX-2) · [HuggingFace](https://huggingface.co/Lightricks/LTX-2.3) · [Prompting](https://ltx.video/blog/how-to-prompt-for-ltx-2)
 - **MLX**: [GitHub](https://github.com/ml-explore/mlx) · [Docs](https://ml-explore.github.io/mlx/) · [mlx-lm](https://github.com/ml-explore/mlx-lm) · [mlx-audio](https://github.com/Blaizzy/mlx-audio)
-- **Models**: [MLX LTX-2.3](https://huggingface.co/dgrauet/ltx-2.3-mlx-distilled-q8) · [Qwen3.5](https://huggingface.co/Qwen/Qwen3.5-2B)
+- **Models**: [MLX LTX-2.3](https://huggingface.co/dgrauet/ltx-2.3-mlx-q8)
 - **LTX Desktop (reference)**: [GitHub](https://github.com/Lightricks/ltx-desktop)
 
 ---
@@ -230,10 +231,10 @@ Example:
 ## Important Reminders
 
 1. **Metal memory fragmentation is the #1 risk** — aggressive_cleanup() at every stage, streaming VAE, periodic model reload
-2. **Always lazy-load prompt enhancer** — never alongside video model on <64GB
+2. **Prompt enhancement** runs in subprocess — library handles Gemma 3 12B lifecycle
 3. **VAE decode must stream to ffmpeg** — never all frames in RAM (peak OOM trigger)
 4. **ffmpeg required** — `brew install ffmpeg` or bundle static binary
-5. **Only distilled variant supported** — mlx-video-with-audio doesn't support full dev model
+5. **Only distilled variant supported** — ltx-pipelines-mlx doesn't support full dev model
 6. **LTX-2.0 LoRAs incompatible with 2.3** — different latent space, must retrain
 7. **DiT has global temporal attention** — cannot window diffusion loop or use LLM-style KV-caching
 8. **1920×1080 untested on 32GB** — max verified resolution is 1280×704

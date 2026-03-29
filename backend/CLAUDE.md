@@ -18,7 +18,7 @@ Do NOT cross boundaries. If you need something from the other domain, define an 
 - Python 3.12+
 - Package manager: `uv`
 - API framework: FastAPI + uvicorn
-- ML framework: MLX (mlx, mlx-lm); LTX-2.3 model vendored in `engine/ltx23_model/`
+- ML framework: MLX (mlx, ltx-core-mlx, ltx-pipelines-mlx)
 - Video encoding: ffmpeg (external binary)
 - Linter/formatter: ruff
 
@@ -68,8 +68,7 @@ for i in range(num_frames):
 
 ### Model Loading (NON-NEGOTIABLE)
 
-- Prompt enhancer (Qwen3.5-2B) and video model (LTX-2.3) must NEVER coexist on < 64GB
-- Load → use → unload → cleanup → load next
+- Library handles staged loading via `low_memory=True` (Gemma → free → transformer+VAE)
 - Periodic full model reload every 5 generations
 
 ### Performance Optimizations (implement from day 1)
@@ -77,7 +76,6 @@ for i in range(num_frames):
 1. `mx.compile(model.forward)` after loading
 2. Kernel warm-up pass (9 frames, 1 step, 256×256) after loading
 3. LatentPool pre-allocation for max expected resolution
-4. TeaCache (block-output caching, `rel_l1_thresh=0.03`)
 
 ## Starting Point
 
@@ -115,30 +113,11 @@ backend/
 ├── pyproject.toml
 ├── main.py                    # FastAPI entry point
 ├── engine/
-│   ├── generate_v23.py        # LTX-2.3 generation subprocess
-│   ├── encode_text_subprocess.py  # Text encoding subprocess (Gemma 3)
-│   ├── mlx_runner.py          # Subprocess orchestrator
+│   ├── generate_v23.py        # LTX-2.3 generation subprocess (uses ltx-pipelines-mlx)
+│   ├── mlx_runner.py          # Single-subprocess orchestrator
 │   ├── memory_manager.py      # ★ aggressive_cleanup, reload, monitoring
 │   ├── model_manager.py       # Load/unload/download models
-│   ├── prompt_enhancer.py     # Qwen3.5-2B via mlx-lm
 │   ├── lora_manager.py        # LoRA loading and application
-│   ├── teacache.py            # TeaCache MLX port
-│   ├── ltx23_model/           # Vendored LTX-2.3 architecture
-│   │   ├── transformer.py     # DiT blocks (BasicAVTransformerBlock)
-│   │   ├── attention.py       # Multi-head attention + RoPE
-│   │   ├── feed_forward.py    # Feed-forward network
-│   │   ├── model.py           # X0Model, LTXModel wrappers
-│   │   ├── loader.py          # Quantized model loading from split files
-│   │   ├── pipeline.py        # Diffusion generation loop
-│   │   ├── vae_decoder.py     # Video VAE decoder (streaming to ffmpeg)
-│   │   ├── vae_encoder.py     # Video VAE encoder (for I2V)
-│   │   ├── audio_decoder.py   # Audio VAE decoder (latent → mel)
-│   │   ├── vocoder.py         # HiFi-GAN/BigVGAN v2 vocoder + BWE
-│   │   ├── text_encoder.py    # Gemma 3 encoder with dual projections
-│   │   ├── connector.py       # Embeddings connector
-│   │   ├── rope.py            # Rotary position embeddings
-│   │   ├── timestep_embedding.py  # AdaLayerNorm
-│   │   └── patchifier.py      # Video patchification
 │   └── pipelines/
 │       ├── text_to_video.py
 │       ├── image_to_video.py
@@ -159,7 +138,7 @@ backend/
 ## Dependencies
 
 See `pyproject.toml`. Key packages:
-- `mlx>=0.31.0`, `mlx-lm>=0.31.0`
+- `mlx>=0.31.0`, `ltx-core-mlx>=0.1.0`, `ltx-pipelines-mlx>=0.1.0`
 - `fastapi>=0.115.0`, `uvicorn>=0.32.0`, `websockets>=13.0`
 - `safetensors>=0.4.0`, `transformers>=4.51.0`, `huggingface-hub>=0.26.0`
 - `soundfile>=0.12.0` (for audio WAV output)
