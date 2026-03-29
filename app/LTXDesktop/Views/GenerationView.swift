@@ -742,12 +742,12 @@ struct GenerationView: View {
                 .background(Color(.controlBackgroundColor).opacity(0.5))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
             } else {
-                // Drop zone
+                // Drop zone + click to browse
                 VStack(spacing: 6) {
                     Image(systemName: "photo.badge.plus")
                         .font(.title2)
                         .foregroundStyle(.secondary)
-                    Text("Drop image for Image-to-Video")
+                    Text("Drop or click to add image")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -760,11 +760,25 @@ struct GenerationView: View {
                         .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [6, 3]))
                         .foregroundStyle(.secondary.opacity(0.4))
                 )
+                .onTapGesture {
+                    showImagePicker()
+                }
                 .onDrop(of: [UTType.fileURL], isTargeted: nil) { providers in
                     handleDrop(providers: providers)
                     return true
                 }
             }
+        }
+    }
+
+    private func showImagePicker() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.png, .jpeg, .tiff, .heic]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = "Select an image for Image-to-Video"
+        if panel.runModal() == .OK, let url = panel.url {
+            vm.handleImageDrop(urls: [url])
         }
     }
 
