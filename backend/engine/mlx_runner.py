@@ -213,8 +213,13 @@ async def run_mlx_generation(
         if mode == "i2v":
             cmd.extend(["--enhance-mode", "i2v"])
 
-    # Launch subprocess
+    # Launch subprocess — ensure ffmpeg is findable (Xcode strips PATH)
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+    path = env.get("PATH", "")
+    for extra in ("/opt/homebrew/bin", "/usr/local/bin"):
+        if extra not in path:
+            path = f"{extra}:{path}"
+    env["PATH"] = path
 
     proc = await asyncio.create_subprocess_exec(
         *cmd,
@@ -348,6 +353,11 @@ async def run_prompt_enhance(
     ]
 
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+    path = env.get("PATH", "")
+    for extra in ("/opt/homebrew/bin", "/usr/local/bin"):
+        if extra not in path:
+            path = f"{extra}:{path}"
+    env["PATH"] = path
 
     proc = await asyncio.create_subprocess_exec(
         *cmd,
