@@ -81,24 +81,6 @@ def _install_tqdm_hook():
         pass
 
 
-def _install_frame_count_fix():
-    """Patch load_video_frames to round num_frames to VAE-compatible (1 + 8k)."""
-    import ltx_core_mlx.utils.image as image_mod
-    _original_load = image_mod.load_video_frames
-
-    def _patched_load(video_path, height, width, num_frames):
-        # Round to nearest 1 + 8k (VAE temporal stride = 8)
-        k = max(1, round((num_frames - 1) / 8))
-        compatible = 1 + k * 8
-        return _original_load(video_path, height, width, compatible)
-
-    image_mod.load_video_frames = _patched_load
-    # Also patch the import in retake module
-    try:
-        import ltx_pipelines_mlx.retake as retake_mod
-        retake_mod.load_video_frames = _patched_load
-    except (ImportError, AttributeError):
-        pass
 
 
 # ---------------------------------------------------------------------------
@@ -367,7 +349,6 @@ def main() -> None:
         return
 
     _install_tqdm_hook()
-    _install_frame_count_fix()
     pipeline = _create_pipeline(args)
 
     if args.mode == "retake":
