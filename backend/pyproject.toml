@@ -36,6 +36,7 @@ dev = [
 
 [tool.uv]
 environments = ["sys_platform == 'darwin'"]
+prerelease = "allow"
 
 [tool.ruff]
 line-length = 100
