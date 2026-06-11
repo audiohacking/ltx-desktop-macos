@@ -258,23 +258,28 @@ memory_pressure_monitor = MemoryPressureMonitor()
 
 
 def _get_system_available_memory_gb() -> float:
-    """Get available system memory in GB (macOS-specific)."""
+    """Get available system memory in GB (macOS-specific).
+
+    Counts free + inactive + speculative pages (like psutil's "available").
+    Inactive pages are reclaimable on demand — macOS keeps free pages near
+    zero by design, so counting only "Pages free" reports ~0.5 GB on a
+    healthy machine and falsely triggers memory-pressure actions.
+    """
     if platform.system() != "Darwin":
         return 0.0
     try:
-        # Use vm_stat for approximate available memory
         vm = subprocess.run(
             ["vm_stat"], capture_output=True, text=True, check=True
         )
-        free_pages = 0
+        available_pages = 0
         page_size = 16384  # Default on Apple Silicon
         for line in vm.stdout.splitlines():
             if "page size" in line.lower():
                 page_size = int("".join(c for c in line if c.isdigit()) or "16384")
-            if "Pages free" in line or "Pages speculative" in line:
+            if line.startswith(("Pages free", "Pages inactive", "Pages speculative")):
                 val = line.split(":")[1].strip().rstrip(".")
-                free_pages += int(val)
-        return (free_pages * page_size) / (1024**3)
+                available_pages += int(val)
+        return (available_pages * page_size) / (1024**3)
     except Exception:
         log.debug("Failed to read system memory, returning 0")
         return 0.0
