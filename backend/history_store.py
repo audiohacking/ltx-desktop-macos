@@ -63,7 +63,9 @@ def add_entry(
         job_id: Unique job identifier.
         prompt: The text prompt used for generation.
         output_path: Absolute path to the output video file.
-        duration_seconds: Ignored — video duration is computed from num_frames/fps.
+        duration_seconds: Wall-clock generation time, stored as
+            ``generation_time_seconds``. The entry's ``duration_seconds``
+            is the video duration, computed from num_frames/fps.
         width: Output video width in pixels.
         height: Output video height in pixels.
         num_frames: Number of generated frames.
@@ -78,6 +80,7 @@ def add_entry(
         "prompt": prompt,
         "output_path": output_path,
         "duration_seconds": video_duration,
+        "generation_time_seconds": round(duration_seconds, 2),
         "width": width,
         "height": height,
         "num_frames": num_frames,

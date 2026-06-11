@@ -18,7 +18,7 @@ Do NOT cross boundaries. If you need something from the other domain, define an 
 - Python 3.12+
 - Package manager: `uv`
 - API framework: FastAPI + uvicorn
-- ML framework: MLX (mlx, ltx-core-mlx, ltx-pipelines-mlx)
+- ML framework: MLX (mlx, ltx-core-mlx ≥0.14, ltx-pipelines-mlx ≥0.14 — from the dgrauet/ltx-2-mlx monorepo)
 - Video encoding: ffmpeg (external binary)
 - Linter/formatter: ruff
 
@@ -120,7 +120,6 @@ backend/
 │   └── pipelines/
 │       ├── text_to_video.py
 │       ├── image_to_video.py
-│       ├── preview.py
 │       ├── retake.py
 │       └── extend.py
 ├── audio/                         # Reserved for future TTS/mixing
@@ -135,7 +134,8 @@ backend/
 ## Dependencies
 
 See `pyproject.toml`. Key packages:
-- `mlx>=0.31.0`, `ltx-core-mlx>=0.1.0`, `ltx-pipelines-mlx>=0.1.0`
+- `mlx>=0.31.0`, `ltx-core-mlx` 0.14.x, `ltx-pipelines-mlx` 0.14.x (git: dgrauet/ltx-2-mlx@main)
+- lib 0.14 API: `frame_rate=` keyword obligatoire sur tous les `generate*`; classes `DistilledPipeline` / `TI2VidOneStagePipeline` / `TI2VidTwoStagesPipeline` / `TI2VidTwoStagesHQPipeline` / `RetakePipeline` (extend inclus); I2V via `image=` sur tous les pipelines
 - `fastapi>=0.115.0`, `uvicorn>=0.32.0`, `websockets>=13.0`
 - `safetensors>=0.4.0`, `transformers>=4.51.0`, `huggingface-hub>=0.26.0`
 - `soundfile>=0.12.0` (for audio WAV output)

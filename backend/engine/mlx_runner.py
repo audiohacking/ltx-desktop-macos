@@ -39,9 +39,10 @@ _STATUS_RE = re.compile(r"^STATUS:(.+)")
 _MEMORY_RE = re.compile(r"^MEMORY:(\w+):active=([\d.]+):cache=([\d.]+):peak=([\d.]+)")
 _PREVIEW_RE = re.compile(r"^PREVIEW:(.+)")
 
-# Progress ranges for mapping STAGE lines to 0.0-1.0
+# Progress ranges for mapping STAGE lines to 0.0-1.0.
+# All default pipelines (distilled, two-stage, two-stage-hq) run two denoise
+# loops; one-stage dev runs a single loop and simply never emits stage 2.
 _STAGE_RANGES = {1: (0.05, 0.55), 2: (0.65, 0.80)}
-_SINGLE_STAGE_RANGES = {1: (0.05, 0.85)}
 
 # Status string -> approximate progress
 _STATUS_PROGRESS = {
@@ -120,10 +121,9 @@ def get_venv_python() -> str:
 # Progress helpers
 # ---------------------------------------------------------------------------
 
-def _compute_progress(stage: int, step: int, total: int, *, two_stage: bool = False) -> float:
+def _compute_progress(stage: int, step: int, total: int) -> float:
     """Map (stage, step, total) to a 0.0-1.0 progress value."""
-    ranges = _STAGE_RANGES if two_stage else _SINGLE_STAGE_RANGES
-    lo, hi = ranges.get(stage, (0.0, 1.0))
+    lo, hi = _STAGE_RANGES.get(stage, (0.0, 1.0))
     if total <= 0:
         return lo
     frac = step / total
@@ -146,9 +146,10 @@ async def run_mlx_generation(
     image: str | None = None,
     image_strength: float = 1.0,
     num_steps: int = 8,
-    pipeline_type: str = "one-stage",
+    pipeline_type: str = "distilled",
     cfg_scale: float = 3.0,
-    stg_scale: float = 0.0,
+    stg_scale: float = 1.0,
+    low_ram: bool = False,
     enhance_prompt: bool = False,
     lora_args: list[str] | None = None,
     retake_source: str | None = None,
@@ -187,6 +188,9 @@ async def run_mlx_generation(
         "--cfg-scale", str(cfg_scale),
         "--stg-scale", str(stg_scale),
     ]
+
+    if low_ram:
+        cmd.append("--low-ram")
 
     # I2V args
     if image:
@@ -238,7 +242,7 @@ async def run_mlx_generation(
     # Parse stderr for progress
     subprocess_memory: dict[str, dict] = {}
     last_pct = 0.0
-    last_step, last_total, last_stage = 0, 0, 1
+    last_step, last_total = 0, 0
     # Keep last N stderr lines for error diagnosis (readline consumes them)
     from collections import deque
     _stderr_tail: deque[str] = deque(maxlen=100)
@@ -275,7 +279,7 @@ async def run_mlx_generation(
         if m:
             stage, step, total = int(m.group(1)), int(m.group(2)), int(m.group(3))
             pct = _compute_progress(stage, step, total)
-            last_pct, last_step, last_total, last_stage = pct, step, total, stage
+            last_pct, last_step, last_total = pct, step, total
             if progress_callback:
                 r = progress_callback(step, total, pct, None, status="Generating video")
                 if asyncio.iscoroutine(r):
