@@ -11,12 +11,8 @@ from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
-
-import mlx.core as mx
 
 from engine.memory_manager import aggressive_cleanup, get_memory_stats
-
 
 # ---------------------------------------------------------------------------
 # tqdm monkey-patch — intercept library progress bars to emit STAGE/STEP
@@ -106,33 +102,38 @@ def _report_memory(label: str) -> None:
 # ---------------------------------------------------------------------------
 
 def _create_pipeline(args: argparse.Namespace):
-    """Instantiate the correct library pipeline for the given mode and pipeline type."""
+    """Instantiate the correct library pipeline for the given mode and pipeline type.
+
+    Since ltx-2-mlx 0.10, I2V is supported on every pipeline via the
+    ``image=`` kwarg (no dedicated ImageToVideoPipeline), and extend is
+    folded into RetakePipeline.
+    """
     from ltx_pipelines_mlx import (
-        ExtendPipeline,
-        ImageToVideoPipeline,
+        DistilledPipeline,
         RetakePipeline,
-        TextToVideoPipeline,
-        TwoStageHQPipeline,
-        TwoStagePipeline,
+        TI2VidOneStagePipeline,
+        TI2VidTwoStagesHQPipeline,
+        TI2VidTwoStagesPipeline,
     )
 
     model_dir = args.model_dir
-    gemma = args.gemma or "mlx-community/gemma-3-12b-it-4bit"
-    low_memory = True
-    pipeline_type = getattr(args, "pipeline_type", "one-stage")
+    common = {
+        "gemma_model_id": args.gemma or "mlx-community/gemma-3-12b-it-4bit",
+        "low_memory": True,
+        "low_ram_streaming": args.low_ram,
+    }
+    pipeline_type = getattr(args, "pipeline_type", "distilled")
 
-    if args.mode == "retake":
-        return RetakePipeline(model_dir, gemma_model_id=gemma, low_memory=low_memory)
-    elif args.mode == "extend":
-        return ExtendPipeline(model_dir, gemma_model_id=gemma, low_memory=low_memory)
+    if args.mode in ("retake", "extend"):
+        return RetakePipeline(model_dir, **common)
     elif pipeline_type == "two-stage":
-        return TwoStagePipeline(model_dir, gemma_model_id=gemma, low_memory=low_memory)
+        return TI2VidTwoStagesPipeline(model_dir, **common)
     elif pipeline_type == "two-stage-hq":
-        return TwoStageHQPipeline(model_dir, gemma_model_id=gemma, low_memory=low_memory)
-    elif args.mode == "i2v":
-        return ImageToVideoPipeline(model_dir, gemma_model_id=gemma, low_memory=low_memory)
-    else:  # one-stage t2v
-        return TextToVideoPipeline(model_dir, gemma_model_id=gemma, low_memory=low_memory)
+        return TI2VidTwoStagesHQPipeline(model_dir, **common)
+    elif pipeline_type == "one-stage":
+        return TI2VidOneStagePipeline(model_dir, **common)
+    else:  # distilled (fastest, 8+3 steps, no CFG)
+        return DistilledPipeline(model_dir, **common)
 
 
 # ---------------------------------------------------------------------------
@@ -159,8 +160,7 @@ def _run_t2v(pipeline, args: argparse.Namespace) -> None:
     _current_stage = 1
     _progress("STATUS:Generating video")
 
-    pipeline_type = getattr(args, "pipeline_type", "one-stage")
-    is_two_stage = pipeline_type in ("two-stage", "two-stage-hq")
+    pipeline_type = getattr(args, "pipeline_type", "distilled")
 
     gen_kwargs: dict = {
         "prompt": args.prompt,
@@ -168,15 +168,20 @@ def _run_t2v(pipeline, args: argparse.Namespace) -> None:
         "height": args.height,
         "width": args.width,
         "num_frames": args.num_frames,
+        "frame_rate": float(args.fps),
         "seed": args.seed,
     }
 
-    if is_two_stage:
+    if pipeline_type == "one-stage":
+        gen_kwargs["num_steps"] = args.num_steps
+        gen_kwargs["cfg_scale"] = args.cfg_scale
+        gen_kwargs["stg_scale"] = args.stg_scale
+    elif pipeline_type in ("two-stage", "two-stage-hq"):
         gen_kwargs["stage1_steps"] = args.num_steps
         gen_kwargs["cfg_scale"] = args.cfg_scale
         gen_kwargs["stg_scale"] = args.stg_scale
-    else:
-        gen_kwargs["num_steps"] = args.num_steps
+    else:  # distilled — fixed sigma schedules, CFG/STG don't apply
+        gen_kwargs["stage1_steps"] = args.num_steps
 
     if args.mode == "i2v" and args.image:
         gen_kwargs["image"] = args.image
@@ -185,6 +190,25 @@ def _run_t2v(pipeline, args: argparse.Namespace) -> None:
 
     _report_memory("after_generation")
     _progress("STATUS:Done")
+
+
+def _decode_and_save(pipeline, video_latent, audio_latent, args: argparse.Namespace) -> None:
+    """Decode latents and save, mirroring the library CLI's retake/extend flow.
+
+    Frees the DiT + text encoder first so the decoders fit in memory, then
+    loads decoders on demand.
+    """
+    if pipeline.low_memory:
+        pipeline.dit = None
+        pipeline.text_encoder = None
+        pipeline.feature_extractor = None
+        pipeline._loaded = False
+        aggressive_cleanup()
+
+    pipeline._load_decoders()
+    pipeline._decode_and_save_video(
+        video_latent, audio_latent, args.output_path, frame_rate=float(args.fps),
+    )
 
 
 def _run_retake(pipeline, args: argparse.Namespace) -> None:
@@ -205,10 +229,12 @@ def _run_retake(pipeline, args: argparse.Namespace) -> None:
         end_frame=args.retake_end_frame,
         seed=args.seed,
         num_steps=args.num_steps or 30,
+        cfg_scale=args.cfg_scale,
+        stg_scale=args.stg_scale,
     )
 
     _progress("STATUS:Decoding video")
-    pipeline._decode_and_save_video(video_latent, audio_latent, args.output_path)
+    _decode_and_save(pipeline, video_latent, audio_latent, args)
 
     _report_memory("after_generation")
     _progress("STATUS:Done")
@@ -232,10 +258,12 @@ def _run_extend(pipeline, args: argparse.Namespace) -> None:
         direction=args.extend_direction,
         seed=args.seed,
         num_steps=args.num_steps or 30,
+        cfg_scale=args.cfg_scale,
+        stg_scale=args.stg_scale,
     )
 
     _progress("STATUS:Decoding video")
-    pipeline._decode_and_save_video(video_latent, audio_latent, args.output_path)
+    _decode_and_save(pipeline, video_latent, audio_latent, args)
 
     _report_memory("after_generation")
     _progress("STATUS:Done")
@@ -308,12 +336,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--fps", type=int, default=24)
     parser.add_argument("--num-steps", type=int, default=8)
-    parser.add_argument("--pipeline-type", choices=["one-stage", "two-stage", "two-stage-hq"],
-                        default="one-stage", help="Pipeline variant")
+    parser.add_argument("--pipeline-type",
+                        choices=["distilled", "one-stage", "two-stage", "two-stage-hq"],
+                        default="distilled", help="Pipeline variant")
     parser.add_argument("--cfg-scale", type=float, default=3.0,
-                        help="CFG guidance scale (two-stage only)")
-    parser.add_argument("--stg-scale", type=float, default=0.0,
-                        help="STG guidance scale (two-stage only)")
+                        help="CFG guidance scale (ignored by distilled)")
+    parser.add_argument("--stg-scale", type=float, default=1.0,
+                        help="STG guidance scale (ignored by distilled; 1.0 = upstream default)")
+    parser.add_argument("--low-ram", action="store_true",
+                        help="Stream DiT blocks from disk (~75%% less transformer RAM)")
 
     # I2V
     parser.add_argument("--image", default=None, help="Reference image path for I2V")

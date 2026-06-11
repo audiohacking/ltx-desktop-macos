@@ -98,7 +98,8 @@ class T2VRequest(BaseModel):
     seed: int = Field(default=-1, description="Random seed (-1 for random)")
     guidance_scale: float = Field(default=1.0, ge=0.0, le=20.0)
     fps: int = Field(default=24, ge=1, le=60)
-    pipeline_type: str = Field(default="one-stage", pattern="^(one-stage|two-stage|two-stage-hq)$")
+    pipeline_type: str = Field(default="distilled", pattern="^(distilled|one-stage|two-stage|two-stage-hq)$")
+    low_ram: bool = Field(default=False, description="Stream DiT blocks from disk (less RAM)")
     lora_ids: list[str] = Field(default=[], description="LoRA IDs to apply (empty = use active LoRAs)")
 
 
@@ -114,6 +115,8 @@ class I2VRequest(BaseModel):
     seed: int = Field(default=-1, description="Random seed (-1 for random)")
     guidance_scale: float = Field(default=1.0, ge=0.0, le=20.0)
     fps: int = Field(default=24, ge=1, le=60)
+    pipeline_type: str = Field(default="distilled", pattern="^(distilled|one-stage|two-stage|two-stage-hq)$")
+    low_ram: bool = Field(default=False, description="Stream DiT blocks from disk (less RAM)")
     image_strength: float = Field(default=1.0, ge=0.0, le=1.0)
     lora_ids: list[str] = Field(default=[], description="LoRA IDs to apply (empty = use active LoRAs)")
 
@@ -726,6 +729,7 @@ async def _run_t2v(job_id: str, req: T2VRequest) -> None:
             guidance_scale=req.guidance_scale,
             fps=req.fps,
             pipeline_type=req.pipeline_type,
+            low_ram=req.low_ram,
             lora_args=_resolve_lora_args(req.lora_ids),
             model_repo_id=selected_video_model,
             progress_callback=progress_cb,
@@ -787,6 +791,8 @@ async def _run_i2v(job_id: str, req: I2VRequest) -> None:
             seed=resolved_seed,
             guidance_scale=req.guidance_scale,
             fps=req.fps,
+            pipeline_type=req.pipeline_type,
+            low_ram=req.low_ram,
             image_strength=req.image_strength,
             lora_args=_resolve_lora_args(req.lora_ids),
             model_repo_id=selected_video_model,

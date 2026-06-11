@@ -10,8 +10,8 @@ import inspect
 import logging
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from engine.memory_manager import (
     aggressive_cleanup,
@@ -46,6 +46,8 @@ class ImageToVideoPipeline:
         seed: int = 42,
         guidance_scale: float = 1.0,
         fps: int = 24,
+        pipeline_type: str = "distilled",
+        low_ram: bool = False,
         image_strength: float = 1.0,
         lora_args: list[str] | None = None,
         model_repo_id: str | None = None,
@@ -120,6 +122,8 @@ class ImageToVideoPipeline:
             image=source_image_path,
             image_strength=image_strength,
             num_steps=steps,
+            pipeline_type=pipeline_type,
+            low_ram=low_ram,
             lora_args=lora_args,
             progress_callback=_progress_adapter,
             model_repo_id=model_repo_id,

@@ -9,9 +9,9 @@ import inspect
 import logging
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
 
 from engine.memory_manager import (
     aggressive_cleanup,
@@ -56,7 +56,8 @@ class TextToVideoPipeline:
         seed: int = 42,
         guidance_scale: float = 1.0,
         fps: int = 24,
-        pipeline_type: str = "one-stage",
+        pipeline_type: str = "distilled",
+        low_ram: bool = False,
         lora_args: list[str] | None = None,
         model_repo_id: str | None = None,
         progress_callback: Callable[[int, int, float, str | None], None] | None = None,
@@ -127,6 +128,7 @@ class TextToVideoPipeline:
             mode="t2v",
             num_steps=steps,
             pipeline_type=pipeline_type,
+            low_ram=low_ram,
             lora_args=lora_args,
             progress_callback=_progress_adapter,
             model_repo_id=model_repo_id,
