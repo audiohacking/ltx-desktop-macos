@@ -471,7 +471,8 @@ async def set_hf_token(req: HFTokenRequest):
     try:
         login(token=req.token, add_to_git_credential=False)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid HuggingFace token: {e}") from e
+        # Don't interpolate the exception — HF error text can echo the token prefix.
+        raise HTTPException(status_code=400, detail="Invalid or expired HuggingFace token.") from e
     try:
         info = whoami()
         user = info.get("name")
