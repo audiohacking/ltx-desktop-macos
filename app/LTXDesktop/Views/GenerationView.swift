@@ -96,6 +96,9 @@ struct GenerationView: View {
                 // Audio drop zone for A2V (beta)
                 audioDropZone
 
+                // Control-video drop zone for IC-LoRA
+                controlVideoDropZone
+
                 // Prompt
                 Text("Prompt")
                     .font(.headline)
@@ -202,7 +205,7 @@ struct GenerationView: View {
                 }
 
                 // Pipeline type — hidden in A2V mode (A2V uses its own two-stage pipeline)
-                if vm.sourceAudioPath == nil {
+                if vm.sourceAudioPath == nil && vm.controlVideoPath == nil {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text("Pipeline")
@@ -257,7 +260,7 @@ struct GenerationView: View {
 
                 // Guidance scale (CFG) — dev/two-stage pipelines and A2V use CFG;
                 // the distilled pipeline ignores it.
-                if vm.pipelineType != "distilled" || vm.sourceAudioPath != nil {
+                if vm.pipelineType != "distilled" || vm.sourceAudioPath != nil || vm.controlVideoPath != nil {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text("Guidance")
@@ -273,6 +276,15 @@ struct GenerationView: View {
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                // IC-LoRA strengths (only in IC-LoRA mode)
+                if vm.controlVideoPath != nil {
+                    VStack(alignment: .leading, spacing: 10) {
+                        sliderRow("Control strength", value: $vm.controlStrength, range: 0.0...1.0)
+                        sliderRow("IC-LoRA strength", value: $vm.icLoraStrength, range: 0.0...2.0)
+                        sliderRow("Conditioning", value: $vm.conditioningStrength, range: 0.0...1.0)
                     }
                 }
 
@@ -914,6 +926,85 @@ struct GenerationView: View {
         }
     }
 
+    // MARK: - Control Video Drop Zone (IC-LoRA)
+
+    private var controlVideoDropZone: some View {
+        Group {
+            if let controlPath = vm.controlVideoPath {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "square.stack.3d.down.right")
+                            .font(.title2)
+                            .foregroundStyle(.indigo)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Control Video (IC-LoRA)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text(controlPath.components(separatedBy: "/").last ?? "video")
+                                .font(.caption2)
+                                .lineLimit(1)
+                            Button("Clear") { vm.clearControlVideo() }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                        }
+                        Spacer()
+                    }
+                    Toggle("Extract edges (canny) from this video", isOn: $vm.extractEdges)
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                }
+                .padding(8)
+                .background(Color(.controlBackgroundColor).opacity(0.5))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            } else {
+                VStack(spacing: 6) {
+                    Image(systemName: "square.stack.3d.down.right")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                    Text("Drop or click to add control video (IC-LoRA)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 70)
+                .background(Color(.controlBackgroundColor).opacity(0.3))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [6, 3]))
+                        .foregroundStyle(.secondary.opacity(0.4))
+                )
+                .onTapGesture { showControlVideoPicker() }
+                .onDrop(of: [UTType.fileURL], isTargeted: nil) { providers in
+                    handleControlVideoDrop(providers: providers)
+                    return true
+                }
+            }
+        }
+    }
+
+    private func showControlVideoPicker() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.movie, .video, .mpeg4Movie, .quickTimeMovie]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = "Select a control video for IC-LoRA"
+        if panel.runModal() == .OK, let url = panel.url {
+            vm.handleControlVideoDrop(urls: [url])
+        }
+    }
+
+    private func handleControlVideoDrop(providers: [NSItemProvider]) {
+        guard let provider = providers.first else { return }
+        provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { data, _ in
+            guard let urlData = data as? Data,
+                  let url = URL(dataRepresentation: urlData, relativeTo: nil) else { return }
+            let videoTypes = ["mp4", "mov", "m4v", "avi", "mkv", "webm"]
+            guard videoTypes.contains(url.pathExtension.lowercased()) else { return }
+            DispatchQueue.main.async { vm.handleControlVideoDrop(urls: [url]) }
+        }
+    }
+
     private func handleDrop(providers: [NSItemProvider]) {
         guard let provider = providers.first else { return }
         provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { data, _ in
@@ -926,6 +1017,18 @@ struct GenerationView: View {
             DispatchQueue.main.async {
                 vm.handleImageDrop(urls: [url])
             }
+        }
+    }
+
+    private func sliderRow(_ label: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(label).font(.subheadline)
+                Spacer()
+                Text(String(format: "%.2f", value.wrappedValue))
+                    .font(.subheadline).monospacedDigit().foregroundStyle(.secondary)
+            }
+            Slider(value: value, in: range, step: 0.05)
         }
     }
 
