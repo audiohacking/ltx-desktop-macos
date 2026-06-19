@@ -310,6 +310,7 @@ struct QueueJobRow: View {
         case "preview": return .orange
         case "retake": return .purple
         case "extend": return .cyan
+        case "ic-lora": return .indigo
         default: return .secondary
         }
     }

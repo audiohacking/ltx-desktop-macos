@@ -68,6 +68,15 @@ _KNOWN_MODELS: list[dict[str, Any]] = [
         "hf_repo": "Lightricks/LTX-2.3",
         "hf_allow_patterns": ["ltx-2.3-spatial-upscaler-x2-1.0.safetensors"],
     },
+    {
+        "id": "ltx-2.3-ic-lora-union-control",
+        "name": "LTX-2.3 IC-LoRA Union Control",
+        "description": "IC-LoRA for control conditioning (depth/pose/edges) via a reference video.",
+        "size_gb": 0.6,
+        "model_type": "ic-lora",
+        "hf_repo": "Lightricks/LTX-2.3-22b-IC-LoRA-Union-Control",
+        "hf_allow_patterns": ["ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors"],
+    },
 ]
 
 
@@ -102,6 +111,21 @@ def _is_downloaded(model_def: dict[str, Any]) -> bool:
 
     except Exception:
         return False
+
+
+def resolve_ic_lora_path() -> str | None:
+    """Return the local path to the downloaded Union-Control IC-LoRA, or None.
+
+    Returns the cached ``.safetensors`` path if the union-control repo file is
+    present in the HF cache, else None.
+    """
+    from huggingface_hub import try_to_load_from_cache
+
+    cached = try_to_load_from_cache(
+        "Lightricks/LTX-2.3-22b-IC-LoRA-Union-Control",
+        "ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors",
+    )
+    return cached if isinstance(cached, str) else None
 
 
 class ModelDownloadManager:

@@ -25,10 +25,11 @@ import preset_manager
 from engine.lora_manager import LoRAManager
 from engine.memory_manager import aggressive_cleanup, get_memory_stats, memory_pressure_monitor
 from engine.mlx_runner import run_prompt_enhance
-from engine.model_download_manager import ModelDownloadManager
+from engine.model_download_manager import ModelDownloadManager, resolve_ic_lora_path
 from engine.model_manager import ModelManager
 from engine.pipelines.audio_to_video import AudioToVideoPipeline
 from engine.pipelines.extend import ExtendPipeline
+from engine.pipelines.ic_lora_video import IcLoraVideoPipeline
 from engine.pipelines.image_to_video import ImageToVideoPipeline
 from engine.pipelines.retake import RetakePipeline
 from engine.pipelines.text_to_video import TextToVideoPipeline
@@ -44,6 +45,7 @@ model_download_manager = ModelDownloadManager()
 t2v_pipeline = TextToVideoPipeline(model_manager)
 i2v_pipeline = ImageToVideoPipeline(model_manager)
 a2v_pipeline = AudioToVideoPipeline(model_manager)
+iclora_pipeline = IcLoraVideoPipeline(model_manager)
 retake_pipeline = RetakePipeline(model_manager)
 extend_pipeline = ExtendPipeline(model_manager)
 lora_manager = LoRAManager(model_manager)
@@ -141,6 +143,30 @@ class A2VRequest(BaseModel):
     audio_start: float = Field(default=0.0, ge=0.0, description="Audio start time in seconds")
     low_ram: bool = Field(default=False, description="Stream DiT blocks from disk (less RAM)")
     lora_ids: list[str] = Field(default=[], description="LoRA IDs to apply (empty = use active LoRAs)")
+
+
+class ICLoraRequest(BaseModel):
+    """IC-LoRA controlled generation request.
+
+    IC-LoRA uses the library's two-stage pipeline, so it exposes no
+    pipeline_type. ``steps`` is the stage-1 step count (default 30).
+    """
+    prompt: str = Field(..., min_length=1, max_length=2000)
+    source_control_path: str = Field(..., min_length=1)
+    extract_edges: bool = Field(default=False, description="Render canny edges from the source video")
+    ic_lora_path: str | None = Field(default=None, description="Local IC-LoRA path; None = downloaded Union-Control")
+    ic_lora_strength: float = Field(default=1.0, ge=0.0, le=2.0)
+    control_strength: float = Field(default=1.0, ge=0.0, le=1.0)
+    conditioning_strength: float = Field(default=1.0, ge=0.0, le=1.0)
+    width: int = Field(default=768, ge=256, le=1920)
+    height: int = Field(default=512, ge=256, le=1920)
+    num_frames: int = Field(default=97, ge=9)
+    steps: int = Field(default=30, ge=1, le=50)
+    seed: int = Field(default=-1, description="Random seed (-1 for random)")
+    guidance_scale: float = Field(default=3.0, ge=0.0, le=20.0)
+    fps: int = Field(default=24, ge=1, le=60)
+    skip_stage_2: bool = Field(default=False)
+    low_ram: bool = Field(default=False, description="Stream DiT blocks from disk (less RAM)")
 
 
 class EnhanceRequest(BaseModel):
@@ -938,6 +964,80 @@ async def _run_a2v(job_id: str, req: A2VRequest) -> None:
         jobs[job_id]["status"] = "failed"
         jobs[job_id]["error"] = str(e)
         log.error("A2V %s failed: %s", job_id, e)
+        await _broadcast_progress(job_id, 0, 0, 0.0, error=str(e))
+    finally:
+        memory_pressure_monitor.check_pressure(job_queue)
+
+
+@app.post("/api/v1/generate/ic-lora", response_model=QueueSubmitResponse)
+async def generate_ic_lora(req: ICLoraRequest, priority: str = "normal"):
+    """Submit an IC-LoRA controlled generation job to the queue."""
+    _check_queue_paused()
+    job_id = str(uuid.uuid4())[:8]
+    pri = _PRIORITY_MAP.get(priority, Priority.NORMAL)
+    jobs[job_id] = {
+        "status": "queued", "progress": 0.0, "result": None, "error": None,
+        "job_type": "ic-lora", "prompt": req.prompt, "priority": priority,
+    }
+    position = await job_queue.submit(
+        job_id=job_id, job_type="ic-lora", priority=pri, prompt=req.prompt,
+        coroutine_factory=lambda jid=job_id, r=req: _run_ic_lora(jid, r),
+    )
+    return QueueSubmitResponse(
+        job_id=job_id, position=position, queue_length=job_queue.get_queue_length(),
+    )
+
+
+async def _run_ic_lora(job_id: str, req: ICLoraRequest) -> None:
+    """Execute IC-LoRA generation in background."""
+    jobs[job_id]["status"] = "running"
+    resolved_seed = _resolve_seed(req.seed)
+
+    lora_path = req.ic_lora_path or resolve_ic_lora_path()
+    if not lora_path:
+        jobs[job_id]["status"] = "failed"
+        msg = "IC-LoRA Union-Control not downloaded — download it in Settings."
+        jobs[job_id]["error"] = msg
+        await _broadcast_progress(job_id, 0, 0, 0.0, error=msg)
+        return
+
+    async def progress_cb(step, total, pct, preview_frame=None, *, status=None):
+        jobs[job_id]["progress"] = pct
+        await _broadcast_progress(job_id, step, total, pct, preview_frame=preview_frame, status=status)
+
+    try:
+        result = await iclora_pipeline.generate(
+            prompt=req.prompt,
+            source_control_path=req.source_control_path,
+            ic_lora_path=lora_path,
+            extract_edges_first=req.extract_edges,
+            width=req.width, height=req.height, num_frames=req.num_frames,
+            steps=req.steps, seed=resolved_seed, guidance_scale=req.guidance_scale,
+            fps=req.fps, control_strength=req.control_strength,
+            ic_lora_strength=req.ic_lora_strength,
+            conditioning_strength=req.conditioning_strength,
+            skip_stage_2=req.skip_stage_2, low_ram=req.low_ram,
+            model_repo_id=selected_video_model, progress_callback=progress_cb,
+        )
+        jobs[job_id]["status"] = "completed"
+        jobs[job_id]["progress"] = 1.0
+        jobs[job_id]["result"] = {
+            "job_id": result.job_id, "output_path": result.output_path,
+            "duration_seconds": result.duration_seconds,
+            "memory_after": result.memory_after, "stages": result.stages,
+        }
+        await _broadcast_progress(job_id, 0, 0, 1.0, done=True)
+        log.info("IC-LoRA %s completed in %.2fs", job_id, result.duration_seconds)
+        history_store.add_entry(
+            job_id=job_id, prompt=req.prompt, output_path=result.output_path,
+            duration_seconds=result.duration_seconds, width=req.width,
+            height=req.height, num_frames=req.num_frames, fps=req.fps,
+            seed=resolved_seed, generation_type="ic-lora",
+        )
+    except Exception as e:
+        jobs[job_id]["status"] = "failed"
+        jobs[job_id]["error"] = str(e)
+        log.error("IC-LoRA %s failed: %s", job_id, e)
         await _broadcast_progress(job_id, 0, 0, 0.0, error=str(e))
     finally:
         memory_pressure_monitor.check_pressure(job_queue)

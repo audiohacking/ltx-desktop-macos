@@ -111,6 +111,7 @@ def _create_pipeline(args: argparse.Namespace):
     from ltx_pipelines_mlx import (
         A2VidPipelineTwoStage,
         DistilledPipeline,
+        ICLoraPipeline,
         RetakePipeline,
         TI2VidOneStagePipeline,
         TI2VidTwoStagesHQPipeline,
@@ -130,6 +131,10 @@ def _create_pipeline(args: argparse.Namespace):
     elif args.mode == "a2v":
         # A2V is its own two-stage Euler+CFG pipeline; it ignores pipeline_type.
         return A2VidPipelineTwoStage(model_dir, **common)
+    elif args.mode == "ic-lora":
+        return ICLoraPipeline(
+            model_dir, lora_paths=_parse_lora_args(args.ic_lora or []), **common,
+        )
     elif pipeline_type == "two-stage":
         return TI2VidTwoStagesPipeline(model_dir, **common)
     elif pipeline_type == "two-stage-hq":
@@ -243,6 +248,48 @@ def _run_a2v(pipeline, args: argparse.Namespace) -> None:
             ImageConditioningInput(
                 path=args.image, frame_idx=0, strength=args.image_strength,
             )
+        ]
+
+    pipeline.generate_and_save(**gen_kwargs)
+
+    _report_memory("after_generation")
+    _progress("STATUS:Done")
+
+
+def _run_ic_lora(pipeline, args: argparse.Namespace) -> None:
+    """IC-LoRA controlled generation (two-stage Euler + CFG)."""
+    global _current_stage
+
+    _progress("STATUS:Loading model")
+    _report_memory("before_load")
+
+    pipeline.load()
+
+    _report_memory("after_model_load")
+    _current_stage = 1
+    _progress("STATUS:Generating video")
+
+    video_conditioning = _parse_lora_args(args.video_conditioning or [])
+
+    gen_kwargs: dict = {
+        "prompt": args.prompt,
+        "output_path": args.output_path,
+        "video_conditioning": video_conditioning,
+        "height": args.height,
+        "width": args.width,
+        "num_frames": args.num_frames,
+        "frame_rate": float(args.fps),
+        "seed": args.seed,
+        "stage1_steps": args.num_steps,
+        "cfg_scale": args.cfg_scale,
+        "stg_scale": args.stg_scale,
+        "conditioning_attention_strength": args.conditioning_strength,
+        "skip_stage_2": args.skip_stage_2,
+    }
+    if args.image:
+        from ltx_pipelines_mlx.utils.args import ImageConditioningInput
+        gen_kwargs["images"] = [
+            ImageConditioningInput(path=args.image, frame_idx=0, strength=args.image_strength),
         ]
 
     pipeline.generate_and_save(**gen_kwargs)
@@ -381,8 +428,12 @@ def _run_enhance(args: argparse.Namespace) -> None:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="LTX-2.3 generation subprocess")
 
-    parser.add_argument("--mode", choices=["t2v", "i2v", "a2v", "retake", "extend", "enhance"],
-                        default="t2v", help="Pipeline mode")
+    parser.add_argument(
+        "--mode",
+        choices=["t2v", "i2v", "a2v", "ic-lora", "retake", "extend", "enhance"],
+        default="t2v",
+        help="Pipeline mode",
+    )
     parser.add_argument("--prompt", required=True)
     parser.add_argument("--model-dir", required=True, help="HF model path or repo ID")
     parser.add_argument("--output-path", default="output.mp4")
@@ -413,6 +464,16 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--audio", default=None, help="Reference audio path for A2V")
     parser.add_argument("--audio-start", type=float, default=0.0,
                         help="Audio start time in seconds")
+
+    # IC-LoRA
+    parser.add_argument("--ic-lora", action="append", default=None,
+                        help="IC-LoRA weights as PATH:STRENGTH (repeatable)")
+    parser.add_argument("--video-conditioning", action="append", default=None,
+                        help="Control video as PATH:STRENGTH (repeatable)")
+    parser.add_argument("--conditioning-strength", type=float, default=1.0,
+                        help="IC-LoRA conditioning attention strength 0.0-1.0")
+    parser.add_argument("--skip-stage-2", action="store_true",
+                        help="Skip stage-2 upsampling (half-resolution output)")
 
     # Retake
     parser.add_argument("--retake-source", default=None, help="Source video for retake")
@@ -452,6 +513,8 @@ def main() -> None:
         _run_extend(pipeline, args)
     elif args.mode == "a2v":
         _run_a2v(pipeline, args)
+    elif args.mode == "ic-lora":
+        _run_ic_lora(pipeline, args)
     else:
         _run_t2v(pipeline, args)
 

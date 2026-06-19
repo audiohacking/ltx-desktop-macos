@@ -5,9 +5,13 @@ from __future__ import annotations
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import httpx
 import pytest
+
+# Add backend directory to path for unit tests
+sys.path.insert(0, str(Path(__file__).parent.parent / "backend"))
 
 BACKEND_URL = "http://127.0.0.1:8000"
 

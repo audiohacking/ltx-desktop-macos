@@ -67,6 +67,7 @@ FastAPI in separate process for: crash isolation (OOM kills backend, not UI), GI
 - ✅ Video retake & extend wired end-to-end (unified `RetakePipeline`, beta-tier in lib)
 - ✅ Pipeline selector: distilled (default, 8+3 steps) / one-stage dev / two-stage dev+CFG / two-stage HQ — dev pipelines now supported
 - ✅ Backend `low_ram` option (block streaming, ~75% less transformer RAM — q8 on 16GB)
+- ✅ IC-LoRA control (depth/pose/edges) — control-video conditioning via `ICLoraPipeline`; in-app canny extraction; Union-Control LoRA downloadable. depth/pose extraction out of scope (user-supplied).
 
 **REMAINING:**
 - **Progressive diffusion display** — consumer plumbing (mlx_runner → VM → View) exists but the subprocess **never emits `PREVIEW:`**; the lib's sampler has no per-step callback, so this is **blocked on `ltx-2-mlx`** (add a step callback to `utils/samplers.py`)
@@ -115,6 +116,7 @@ GET  /api/v1/history                     DELETE /api/v1/history/{job_id}
 ### Working too (beta-tier in ltx-pipelines-mlx)
 ```
 POST /api/v1/generate/retake             POST /api/v1/generate/extend
+POST /api/v1/generate/ic-lora
 ```
 
 ### Untested (code exists, no end-to-end verification with real LoRAs)
