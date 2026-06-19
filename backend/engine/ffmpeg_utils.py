@@ -121,3 +121,30 @@ def has_audio_stream(video_path: str) -> bool:
         return result.returncode == 0 and "audio" in result.stdout.strip()
     except Exception:
         return False
+
+
+def extract_edges(
+    input_path: str, output_path: str, *, low: float = 0.1, high: float = 0.4,
+) -> None:
+    """Render a canny-edge control video from a normal video via ffmpeg.
+
+    Uses the ``edgedetect`` filter. The output keeps the source dimensions and
+    frame rate and drops audio.
+
+    Args:
+        input_path: Source video file.
+        output_path: Destination mp4 path.
+        low: Lower canny threshold (0-1).
+        high: Upper canny threshold (0-1).
+
+    Raises:
+        RuntimeError: If ffmpeg exits non-zero.
+    """
+    cmd = [
+        "ffmpeg", "-y", "-i", input_path,
+        "-vf", f"edgedetect=low={low}:high={high}",
+        "-an", output_path,
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffmpeg edge extraction failed: {proc.stderr[-500:]}")
