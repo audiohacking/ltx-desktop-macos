@@ -32,8 +32,14 @@ actor CoreMLModelManager {
         // Compile once and cache the .mlmodelc.
         if !FileManager.default.fileExists(atPath: compiledURL.path) {
             if !FileManager.default.fileExists(atPath: pkgDir.path) {
-                try await downloadPackage(into: pkgDir, progress: progress)
+                do {
+                    try await downloadPackage(into: pkgDir, progress: progress)
+                } catch {
+                    try? FileManager.default.removeItem(at: pkgDir)
+                    throw error
+                }
             }
+            progress(0.95)
             let compiled: URL
             do {
                 compiled = try await MLModel.compileModel(at: pkgDir)
