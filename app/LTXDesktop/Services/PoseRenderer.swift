@@ -28,6 +28,8 @@ enum PoseRenderer {
         (.nose, .rightEye,  (0.00, 0.80, 0.80)),
         (.leftEye, .leftEar,   (0.80, 0.40, 0.00)),
         (.rightEye, .rightEar, (0.00, 0.40, 0.80)),
+        (.leftShoulder, .rightShoulder, (0.90, 0.90, 0.90)),
+        (.leftHip, .rightHip,           (0.00, 0.90, 0.90)),
     ]
 
     private static let confidenceThreshold: Float = 0.1
