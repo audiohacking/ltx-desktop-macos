@@ -99,13 +99,19 @@ actor ControlVideoProcessor {
         return outURL
     }
 
-    // Task 1: identity transform. Tasks 2/4 extend this switch for .pose / .depth.
     func transformFrame(_ pixelBuffer: CVPixelBuffer, type: ControlType) throws -> CGImage {
-        let ci = CIImage(cvPixelBuffer: pixelBuffer)
-        guard let cg = ciContext.createCGImage(ci, from: ci.extent) else {
-            throw ControlProcessingError.writeFailed
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        switch type {
+        case .pose:
+            return try PoseRenderer.skeleton(from: pixelBuffer, width: width, height: height)
+        default:
+            let ci = CIImage(cvPixelBuffer: pixelBuffer)
+            guard let cg = ciContext.createCGImage(ci, from: ci.extent) else {
+                throw ControlProcessingError.writeFailed
+            }
+            return cg
         }
-        return cg
     }
 
     private func makePixelBuffer(from cg: CGImage, width: Int, height: Int) throws -> CVPixelBuffer {
