@@ -35,6 +35,9 @@ jobs:
 
       - name: Prepare embedded Python
         if: steps.python-cache.outputs.cache-hit != 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: bash scripts/prepare-python.sh
 
       - name: Generate Python dependency hash

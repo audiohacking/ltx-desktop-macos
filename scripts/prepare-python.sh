@@ -34,9 +34,52 @@ case "$ARCH" in
         ;;
 esac
 
+fetch_latest_release_json() {
+    local out="$1"
+    local api_url="https://api.github.com/repos/astral-sh/python-build-standalone/releases/latest"
+
+    if command -v gh &>/dev/null; then
+        if [ -n "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ]; then
+            echo "  Fetching release metadata via gh api..."
+            gh api "$api_url" > "$out"
+            return 0
+        fi
+        if gh auth status &>/dev/null; then
+            echo "  Fetching release metadata via gh api (authenticated)..."
+            gh api "$api_url" > "$out"
+            return 0
+        fi
+    fi
+
+    echo "  Fetching release metadata via curl..."
+    local curl_args=(
+        -fsSL
+        -H "Accept: application/vnd.github+json"
+        -H "User-Agent: ltx-desktop-macos-build"
+    )
+    if [ -n "${GITHUB_TOKEN:-}" ]; then
+        curl_args+=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
+    fi
+    curl "${curl_args[@]}" -o "$out" "$api_url"
+}
+
+download_release_asset() {
+    local url="$1"
+    local out="$2"
+    local curl_args=(
+        -L
+        --fail
+        --progress-bar
+        -H "User-Agent: ltx-desktop-macos-build"
+    )
+    if [ -n "${GITHUB_TOKEN:-}" ]; then
+        curl_args+=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
+    fi
+    curl "${curl_args[@]}" -o "$out" "$url"
+}
+
 echo "Resolving latest python-build-standalone release..."
-curl -fsSL https://api.github.com/repos/astral-sh/python-build-standalone/releases/latest \
-    -o "$RELEASE_JSON"
+fetch_latest_release_json "$RELEASE_JSON"
 
 PBS_TAG="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$RELEASE_JSON" | head -1)"
 ASSET_NAME="$(grep -o "cpython-${PYTHON_VERSION}[^\"]*${PBS_ARCH}-apple-darwin-install_only_stripped.tar.gz" "$RELEASE_JSON" \
@@ -115,7 +158,7 @@ echo "Step 4: Downloading Python $PYTHON_VERSION standalone ($PBS_ARCH)..."
 echo "  URL: $PBS_URL"
 
 PYTHON_TAR="$TEMP_DIR/python-standalone.tar.gz"
-curl -L --fail --progress-bar -o "$PYTHON_TAR" "$PBS_URL"
+download_release_asset "$PBS_URL" "$PYTHON_TAR"
 echo "  Downloaded Python standalone package"
 
 echo "  Extracting..."
