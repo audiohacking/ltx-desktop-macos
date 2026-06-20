@@ -256,19 +256,13 @@ def _run_a2v(pipeline, args: argparse.Namespace) -> None:
     _progress("STATUS:Done")
 
 
-def _run_ic_lora(pipeline, args: argparse.Namespace) -> None:
-    """IC-LoRA controlled generation (two-stage Euler + CFG)."""
-    global _current_stage
+def build_ic_lora_gen_kwargs(args: argparse.Namespace) -> dict:
+    """Build the kwargs for ICLoraPipeline.generate_and_save from CLI args.
 
-    _progress("STATUS:Loading model")
-    _report_memory("before_load")
-
-    pipeline.load()
-
-    _report_memory("after_model_load")
-    _current_stage = 1
-    _progress("STATUS:Generating video")
-
+    IC-LoRA runs the distilled sampler (8+3 Euler), so it takes NO CFG/STG
+    guidance — ``cfg_scale``/``stg_scale`` are not accepted by the library and
+    must not be passed.
+    """
     video_conditioning = _parse_lora_args(args.video_conditioning or [])
 
     gen_kwargs: dict = {
@@ -281,8 +275,6 @@ def _run_ic_lora(pipeline, args: argparse.Namespace) -> None:
         "frame_rate": float(args.fps),
         "seed": args.seed,
         "stage1_steps": args.num_steps,
-        "cfg_scale": args.cfg_scale,
-        "stg_scale": args.stg_scale,
         "conditioning_attention_strength": args.conditioning_strength,
         "skip_stage_2": args.skip_stage_2,
     }
@@ -291,8 +283,23 @@ def _run_ic_lora(pipeline, args: argparse.Namespace) -> None:
         gen_kwargs["images"] = [
             ImageConditioningInput(path=args.image, frame_idx=0, strength=args.image_strength),
         ]
+    return gen_kwargs
 
-    pipeline.generate_and_save(**gen_kwargs)
+
+def _run_ic_lora(pipeline, args: argparse.Namespace) -> None:
+    """IC-LoRA controlled generation (distilled two-stage, no CFG)."""
+    global _current_stage
+
+    _progress("STATUS:Loading model")
+    _report_memory("before_load")
+
+    pipeline.load()
+
+    _report_memory("after_model_load")
+    _current_stage = 1
+    _progress("STATUS:Generating video")
+
+    pipeline.generate_and_save(**build_ic_lora_gen_kwargs(args))
 
     _report_memory("after_generation")
     _progress("STATUS:Done")
