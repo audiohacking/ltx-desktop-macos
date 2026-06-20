@@ -33,7 +33,7 @@ actor ControlVideoProcessor {
 
     func process(_ inputURL: URL, type: ControlType,
                  progress: @escaping (Double) -> Void) async throws -> URL {
-        let asset = AVAsset(url: inputURL)
+        let asset = AVURLAsset(url: inputURL)
         guard let track = try await asset.loadTracks(withMediaType: .video).first else {
             throw ControlProcessingError.unreadable
         }
@@ -80,6 +80,7 @@ actor ControlVideoProcessor {
 
         var frameIndex = 0
         while let sample = readerOutput.copyNextSampleBuffer() {
+            try Task.checkCancellation()
             guard let srcBuffer = CMSampleBufferGetImageBuffer(sample) else { continue }
             let pts = CMSampleBufferGetPresentationTimeStamp(sample)
             let cg = try transformFrame(srcBuffer, type: type)
